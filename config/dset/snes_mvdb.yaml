@@ -1,0 +1,10 @@
+# @package __global__
+
+datasource:
+  max_sample_rate: 44100
+  max_channels: 2
+
+  train: egs/snes_mvdb/train
+  valid: egs/snes_mvdb/eval
+  evaluate: egs/snes_mvdb/test
+  generate: egs/snes_mvdb/test

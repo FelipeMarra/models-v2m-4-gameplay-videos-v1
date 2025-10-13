@@ -1,0 +1,23 @@
+# @package __global__
+
+classifier_free_guidance:
+  training_dropout: 0.3
+  inference_coef: 3.0
+
+attribute_dropout: {}
+
+fuser:
+  cross_attention_pos_emb: false
+  cross_attention_pos_emb_scale: 1
+  sum: []
+  prepend: []
+  cross: [visual_content]
+  input_interpolate: []
+
+conditioners:
+  visual_content:
+    model: video
+    video:
+      name: google/vivit-b-16x2-kinetics400
+      video_len: 30
+      finetune: true

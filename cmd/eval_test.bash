@@ -1,7 +1,7 @@
 #!/bin/bash
 
 export AUDIOCRAFT_TEAM=default
-export USER=felipe
+export USER=vivit_felipe
 export HYDRA_FULL_ERROR=1
 export CUDA_VISIBLE_DEVICES=1
 

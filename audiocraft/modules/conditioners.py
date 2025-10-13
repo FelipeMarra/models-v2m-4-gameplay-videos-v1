@@ -19,7 +19,7 @@ import einops
 import flashy
 from num2words import num2words
 import spacy
-from transformers import RobertaTokenizer, T5EncoderModel, T5Tokenizer  # type: ignore
+from transformers import RobertaTokenizer, T5EncoderModel, T5Tokenizer, VivitModel  # type: ignore
 import torch
 from torch import nn
 import torch.nn.functional as F
@@ -451,11 +451,13 @@ class T5Conditioner(TextConditioner):
                  autocast_dtype: tp.Optional[str] = 'float32', word_dropout: float = 0.,
                  normalize_text: bool = False):
         assert name in self.MODELS, f"Unrecognized t5 model name (should in {self.MODELS})"
+
         super().__init__(self.MODELS_DIMS[name], output_dim)
         self.device = device
         self.name = name
         self.finetune = finetune
         self.word_dropout = word_dropout
+
         if autocast_dtype is None or self.device == 'cpu':
             self.autocast = TorchAutocast(enabled=False)
             if self.device != 'cpu':
@@ -465,6 +467,7 @@ class T5Conditioner(TextConditioner):
             assert isinstance(dtype, torch.dtype)
             logger.info(f"T5 will be evaluated with autocast as {autocast_dtype}")
             self.autocast = TorchAutocast(enabled=True, device_type=self.device, dtype=dtype)
+
         # Let's disable logging temporarily because T5 will vomit some errors otherwise.
         # thanks https://gist.github.com/simon-weber/7853144
         previous_level = logging.root.manager.disable
@@ -476,6 +479,7 @@ class T5Conditioner(TextConditioner):
                 t5 = T5EncoderModel.from_pretrained(name).train(mode=finetune)
             finally:
                 logging.disable(previous_level)
+
         if finetune:
             self.t5 = t5
         else:
@@ -490,8 +494,10 @@ class T5Conditioner(TextConditioner):
     def tokenize(self, x: tp.List[tp.Optional[str]]) -> tp.Dict[str, torch.Tensor]:
         # if current sample doesn't have a certain attribute, replace with empty string
         entries: tp.List[str] = [xi if xi is not None else "" for xi in x]
+
         if self.normalize_text:
             _, _, entries = self.text_normalizer(entries, return_text=True)
+
         if self.word_dropout > 0. and self.training:
             new_entries = []
             for entry in entries:
@@ -510,10 +516,61 @@ class T5Conditioner(TextConditioner):
         mask = inputs['attention_mask']
         with torch.set_grad_enabled(self.finetune), self.autocast:
             embeds = self.t5(**inputs).last_hidden_state
+            print(f"===================> T5 EMBEDS SIZE Pre-proj {embeds.shape} <===================")
         embeds = self.output_proj(embeds.to(self.output_proj.weight))
         embeds = (embeds * mask.unsqueeze(-1))
+        print(f"===================> T5 EMBEDS SIZE {embeds.shape} <===================")
         return embeds, mask
 
+class VideoConditioner(BaseConditioner):
+    ...
+
+class ViViTConditioner(VideoConditioner):
+    """
+        ViViT-based Video Conditioner
+    """
+
+    MODELS = ["google/vivit-b-16x2-kinetics400"]
+    MODELS_DIMS = {
+        "google/vivit-b-16x2-kinetics400": 768,
+    }
+
+    def __init__(self, name: str, output_dim: int, finetune:bool, device:str, video_len:int=30):
+        assert name in self.MODELS, f"Unrecognized ViViT model name (should in {self.MODELS})"
+
+        super().__init__(self.MODELS_DIMS[name], output_dim)
+
+        self.device = device
+        self.name = name
+        self.finetune = finetune
+        self.video_len = video_len
+
+        # TODO: autocast?
+
+        vivit = VivitModel.from_pretrained(name).train(mode=finetune) # type: ignore
+
+        if finetune:
+            self.vivit = vivit
+        else:
+            # this makes sure that the vivit models is not part of the saved checkpoint
+            self.__dict__['vivit'] = vivit.to(device)
+
+    def force_video_len(self, video:torch.Tensor):
+        T, C, H, W = video.shape
+        gap = self.video_len - T
+        if gap > 0:
+            last_image = video[-T].unsqueeze(0)
+            for _ in range(gap):
+                video = torch.cat((video, last_image), dim=0)
+        return video
+
+    def tokenize(self, x: tp.List[tp.Optional[str]]) -> tp.Dict[str, torch.Tensor]:
+        # TODO: What is the output dim of the tensors???
+        pass
+
+    def forward(self, inputs: tp.Dict[str, torch.Tensor]) -> ConditionType:
+        pass         
+        # TODO embeds = self.output_proj(embeds.to(self.output_proj.weight))
 
 class WaveformConditioner(BaseConditioner):
     """Base class for all conditioners that take a waveform as input.

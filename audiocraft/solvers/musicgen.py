@@ -145,6 +145,7 @@ class MusicGenSolver(base.StandardSolver):
         # (e.g. we trained the model with quantizers dropout)
         self.compression_model = CompressionSolver.wrapped_model_from_checkpoint(
             self.cfg, self.cfg.compression_model_checkpoint, device=self.device)
+
         assert self.compression_model.sample_rate == self.cfg.sample_rate, (
             f"Compression model sample rate is {self.compression_model.sample_rate} but "
             f"Solver sample rate is {self.cfg.sample_rate}."
@@ -163,12 +164,12 @@ class MusicGenSolver(base.StandardSolver):
         self.logger.info("Compression model has %d codebooks with %d cardinality, and a framerate of %d",
                          self.compression_model.num_codebooks, self.compression_model.cardinality,
                          self.compression_model.frame_rate)
+        
         # instantiate LM model
         self.model: models.LMModel = models.builders.get_lm_model(self.cfg).to(self.device)
-        #print("############################################################################") 
-        #print(f"self.model:\n{self.model}") 
-        #print("############################################################################") 
-        #TODO(felipe) IN FACT when it build the model, THERE IS NO T5 IN HERE! And it is REGISTERED THIS WAY
+        #print("############################################################################")
+        print(f"self.model:\n{self.model}")
+        #print("############################################################################")
         #print(f"self.model state_dict:\n{self.model.state_dict().keys()}") 
         # initialize optimization
         self.initialize_optimization()

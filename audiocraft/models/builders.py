@@ -27,7 +27,7 @@ from ..modules.conditioners import (BaseConditioner, ChromaStemConditioner,
                                     CLAPEmbeddingConditioner,
                                     ConditionFuser, JascoCondConst,
                                     ConditioningProvider, LUTConditioner,
-                                    T5Conditioner, StyleConditioner)
+                                    T5Conditioner, ViViTConditioner, StyleConditioner)
 from ..utils.utils import dict_from_config
 from .encodec import (CompressionModel, EncodecModel,
                       InterleaveStereoCompressionModel)
@@ -166,6 +166,14 @@ def get_conditioner_provider(
             )
         elif model_type == 'style':
             conditioners[str(cond)] = StyleConditioner(
+                output_dim=output_dim,
+                device=device,
+                **model_args
+            )
+        elif model_type == 'video':
+            print("---> GETTING ViViTConditioner")
+            print(f"---> outdim: {output_dim} | device {device} | model args {model_args}")
+            conditioners[str(cond)] = ViViTConditioner(
                 output_dim=output_dim,
                 device=device,
                 **model_args

@@ -1,7 +1,7 @@
 #!/bin/bash
 
 export AUDIOCRAFT_TEAM=default
-export USER=felipe # Will create an audiocraft_felipe folder inside checkpoints
+export USER=vivit_felipe # Will create an audiocraft_felipe folder inside checkpoints
 export CUDA_VISIBLE_DEVICES=1
 
 dora -P audiocraft run -d \

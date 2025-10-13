@@ -2,27 +2,26 @@
 
 export AUDIOCRAFT_TEAM=default
 export USER=vivit_felipe # Will create an audiocraft_felipe folder inside checkpoints
-export CUDA_VISIBLE_DEVICES=1
+export CUDA_VISIBLE_DEVICES=5
 
 dora -P audiocraft run -d \
     fsdp.use=false \
     autocast=true \
-    solver=musicgen/musicgen_base_32khz \
+    solver=musicgen/musicgen_video_32khz \
     model/lm/model_scale=medium \
-    continue_from=//pretrained/facebook/musicgen-medium \
-    conditioner=text2music \
-    conditioners.description.t5.name=t5-base \
-    conditioners.description.t5.finetune=true \
+    conditioner=video2music \
     dset=snes_mvdb \
-    dataset.num_workers=6 \
-    dataset.batch_size=6 \
-    dataset.generate.num_samples=10 \
-    dataset.valid.num_samples=500 \
-    schedule.cosine.warmup=8 \
+    dataset.num_workers=2 \
+    dataset.batch_size=2 \
+    dataset.train.shuffle=true \
+    dataset.train.disable_sampling=true \
+    dataset.generate.num_samples=2 \
+    dataset.valid.num_samples=2 \
+    schedule.cosine.warmup=1 \
     optim.optimizer=adamw \
     optim.lr=1e-4 \
-    optim.epochs=75 \
-    optim.updates_per_epoch=2000 \
+    optim.epochs=2 \
+    optim.updates_per_epoch=null \
     optim.adam.weight_decay=0.01 \
     optim.ema.use=false \
     deadlock.timeout=1200 \

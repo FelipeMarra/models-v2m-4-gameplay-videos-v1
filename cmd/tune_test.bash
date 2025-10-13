@@ -3,31 +3,21 @@
 #TODO: Fine bash script to set model size, tune or not, remove previous xp or not
 
 export AUDIOCRAFT_TEAM=default
-export USER=felipe
+export USER=vivit_felipe
 export CUDA_VISIBLE_DEVICES=5
 
-#rm -rf /app/xps/audiocraft_felipe/xps
-#cd code
-
-# Max batch for model=large; single GPU => 3
-# Max batch for model=small; single GPU => 24
 # /app/xps/audiocraft_felipe/ => default path
 
-# single gpu, small batch size test:
 dora -P audiocraft run -d \
     fsdp.use=false \
     autocast=true \
-    solver=musicgen/musicgen_base_32khz \
-    model/lm/model_scale=small \
-    continue_from=//pretrained/facebook/musicgen-small \
-    conditioner=text2music \
-    conditioners.description.t5.name=t5-base \
-    conditioners.description.t5.finetune=true \
+    solver=musicgen/musicgen_video_32khz \
+    model/lm/model_scale=medium \
+    continue_from=//pretrained/facebook/musicgen-medium \
+    conditioner=video2music \
     dset=snes_mvdb \
     dataset.num_workers=2 \
     dataset.batch_size=2 \
-    dataset.train.shuffle_dataset=true \
-    dataset.train.disable_sampling=true \
     dataset.generate.num_samples=2 \
     dataset.valid.num_samples=2 \
     schedule.cosine.warmup=1 \

@@ -11,6 +11,7 @@ dora -P audiocraft run -d \
     model/lm/model_scale=medium \
     conditioner=video2music \
     dset=snes_mvdb \
+    datasource.train=egs/snes_mvdb/train_mock \
     dataset.num_workers=1 \
     dataset.batch_size=3 \
     dataset.train.shuffle=true \

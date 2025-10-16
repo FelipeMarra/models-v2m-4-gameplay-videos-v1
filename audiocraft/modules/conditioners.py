@@ -20,7 +20,7 @@ import flashy
 from num2words import num2words
 import spacy
 from transformers import RobertaTokenizer, T5EncoderModel, T5Tokenizer  # type: ignore
-from transformers import VivitImageProcessor, VivitForVideoClassification
+from transformers import VivitImageProcessor, VivitModel
 import torch
 from torch import nn
 import torch.nn.functional as F
@@ -542,7 +542,7 @@ class ViViTConditioner(VideoConditioner):
 
     MODELS = ["google/vivit-b-16x2-kinetics400"]
     MODELS_DIMS = {
-        "google/vivit-b-16x2-kinetics400": 400,
+        "google/vivit-b-16x2-kinetics400": 768,
     }
 
     def __init__(self, name: str, output_dim: int, finetune:bool, device:str, video_len:int=32):
@@ -558,7 +558,7 @@ class ViViTConditioner(VideoConditioner):
         # TODO: autocast?
 
         self.image_processor = VivitImageProcessor.from_pretrained(name)
-        vivit = VivitForVideoClassification.from_pretrained(name).train(mode=finetune) # type: ignore
+        vivit = VivitModel.from_pretrained(name).train(mode=finetune) # type: ignore
 
         if finetune:
             self.vivit = vivit
@@ -638,7 +638,7 @@ class ViViTConditioner(VideoConditioner):
 
         with torch.set_grad_enabled(self.finetune):
             outputs = self.vivit(video)
-            embeds = outputs.logits
+            embeds = outputs.pooler_output
 
         empty_idx = torch.LongTensor([i for i, xi in enumerate(mask) if xi == 0])
         mask = torch.ones(video.shape[0], self.output_proj.weight.shape[0])

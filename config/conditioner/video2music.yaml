@@ -11,11 +11,11 @@ fuser:
   cross_attention_pos_emb_scale: 1
   sum: []
   prepend: []
-  cross: [visual_content]
+  cross: [video]
   input_interpolate: []
 
 conditioners:
-  visual_content:
+  video:
     model: video
     video:
       name: google/vivit-b-16x2-kinetics400

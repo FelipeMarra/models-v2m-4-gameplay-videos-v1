@@ -2,7 +2,7 @@
 
 export AUDIOCRAFT_TEAM=default
 export USER=vivit_felipe # Will create an audiocraft_felipe folder inside checkpoints
-export CUDA_VISIBLE_DEVICES=5
+export CUDA_VISIBLE_DEVICES=4
 
 dora -P audiocraft run -d \
     fsdp.use=false \
@@ -11,8 +11,8 @@ dora -P audiocraft run -d \
     model/lm/model_scale=medium \
     conditioner=video2music \
     dset=snes_mvdb \
-    dataset.num_workers=2 \
-    dataset.batch_size=2 \
+    dataset.num_workers=1 \
+    dataset.batch_size=3 \
     dataset.train.shuffle=true \
     dataset.train.disable_sampling=true \
     dataset.generate.num_samples=2 \

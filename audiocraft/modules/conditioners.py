@@ -19,7 +19,8 @@ import einops
 import flashy
 from num2words import num2words
 import spacy
-from transformers import RobertaTokenizer, T5EncoderModel, T5Tokenizer, VivitModel  # type: ignore
+from transformers import RobertaTokenizer, T5EncoderModel, T5Tokenizer  # type: ignore
+from transformers import VivitImageProcessor, VivitForVideoClassification
 import torch
 from torch import nn
 import torch.nn.functional as F
@@ -36,7 +37,8 @@ from ..quantization import ResidualVectorQuantizer
 from ..utils.autocast import TorchAutocast
 from ..utils.cache import EmbeddingCache
 from ..utils.utils import collate, hash_trick, length_to_mask, load_clap_state_dict, warn_once
-
+import av
+import numpy as np
 
 logger = logging.getLogger(__name__)
 TextCondition = tp.Optional[str]  # a text condition can be a string or None (if doesn't exist)
@@ -63,6 +65,7 @@ class WavCondition(tp.NamedTuple):
 class JointEmbedCondition(tp.NamedTuple):
     wav: torch.Tensor
     text: tp.List[tp.Optional[str]]
+    video: tp.List[tp.Optional[str]]
     length: torch.Tensor
     sample_rate: tp.List[int]
     path: tp.List[tp.Optional[str]] = []
@@ -77,6 +80,7 @@ class SymbolicCondition(tp.NamedTuple):
 @dataclass
 class ConditioningAttributes:
     text: tp.Dict[str, tp.Optional[str]] = field(default_factory=dict)
+    video: tp.Dict[str, tp.Optional[str]] = field(default_factory=dict)
     wav: tp.Dict[str, WavCondition] = field(default_factory=dict)
     joint_embed: tp.Dict[str, JointEmbedCondition] = field(default_factory=dict)
     symbolic: tp.Dict[str, SymbolicCondition] = field(default_factory=dict)
@@ -87,6 +91,10 @@ class ConditioningAttributes:
     @property
     def text_attributes(self):
         return self.text.keys()
+
+    @property
+    def video_attributes(self):
+        return self.video.keys()
 
     @property
     def wav_attributes(self):
@@ -105,6 +113,7 @@ class ConditioningAttributes:
         return {
             "text": self.text_attributes,
             "wav": self.wav_attributes,
+            "video": self.video_attributes,
             "joint_embed": self.joint_embed_attributes,
             "symbolic": self.symbolic_attributes,
         }
@@ -112,6 +121,7 @@ class ConditioningAttributes:
     def to_flat_dict(self):
         return {
             **{f"text.{k}": v for k, v in self.text.items()},
+            **{f"video.{k}": v for k, v in self.video.items()},
             **{f"wav.{k}": v for k, v in self.wav.items()},
             **{f"joint_embed.{k}": v for k, v in self.joint_embed.items()},
             **{f"symbolic.{k}": v for k, v in self.symbolic.items()}
@@ -516,10 +526,10 @@ class T5Conditioner(TextConditioner):
         mask = inputs['attention_mask']
         with torch.set_grad_enabled(self.finetune), self.autocast:
             embeds = self.t5(**inputs).last_hidden_state
-            print(f"===================> T5 EMBEDS SIZE Pre-proj {embeds.shape} <===================")
+
         embeds = self.output_proj(embeds.to(self.output_proj.weight))
         embeds = (embeds * mask.unsqueeze(-1))
-        print(f"===================> T5 EMBEDS SIZE {embeds.shape} <===================")
+
         return embeds, mask
 
 class VideoConditioner(BaseConditioner):
@@ -532,10 +542,10 @@ class ViViTConditioner(VideoConditioner):
 
     MODELS = ["google/vivit-b-16x2-kinetics400"]
     MODELS_DIMS = {
-        "google/vivit-b-16x2-kinetics400": 768,
+        "google/vivit-b-16x2-kinetics400": 400,
     }
 
-    def __init__(self, name: str, output_dim: int, finetune:bool, device:str, video_len:int=30):
+    def __init__(self, name: str, output_dim: int, finetune:bool, device:str, video_len:int=32):
         assert name in self.MODELS, f"Unrecognized ViViT model name (should in {self.MODELS})"
 
         super().__init__(self.MODELS_DIMS[name], output_dim)
@@ -547,7 +557,8 @@ class ViViTConditioner(VideoConditioner):
 
         # TODO: autocast?
 
-        vivit = VivitModel.from_pretrained(name).train(mode=finetune) # type: ignore
+        self.image_processor = VivitImageProcessor.from_pretrained(name)
+        vivit = VivitForVideoClassification.from_pretrained(name).train(mode=finetune) # type: ignore
 
         if finetune:
             self.vivit = vivit
@@ -555,22 +566,89 @@ class ViViTConditioner(VideoConditioner):
             # this makes sure that the vivit models is not part of the saved checkpoint
             self.__dict__['vivit'] = vivit.to(device)
 
-    def force_video_len(self, video:torch.Tensor):
-        T, C, H, W = video.shape
-        gap = self.video_len - T
-        if gap > 0:
-            last_image = video[-T].unsqueeze(0)
-            for _ in range(gap):
-                video = torch.cat((video, last_image), dim=0)
-        return video
+    def read_video_pyav(self, container, indices):
+        '''
+        Decode the video with PyAV decoder.
+        Args:
+            container (`av.container.input.InputContainer`): PyAV container.
+            indices (`list[int]`): List of frame indices to decode.
+        Returns:
+            result (np.ndarray): np array of decoded frames of shape (num_frames, height, width, 3).
+        '''
+        frames = []
+        container.seek(0)
+        start_index = indices[0]
+        end_index = indices[-1]
+        for i, frame in enumerate(container.decode(video=0)):
+            if i > end_index:
+                break
+            if i >= start_index and i in indices:
+                frames.append(frame)
+        return np.stack([x.to_ndarray(format="rgb24") for x in frames])
+
+    def sample_frame_indices(self, clip_len, frame_sample_rate, seg_len):
+        '''
+        Sample a given number of frame indices from the video.
+        Args:
+            clip_len (`int`): Total number of frames to sample.
+            frame_sample_rate (`int`): Sample every n-th frame.
+            seg_len (`int`): Maximum allowed index of sample's last frame.
+        Returns:
+            indices (`list[int]`): List of sampled frame indices
+        '''
+        converted_len = int(clip_len * frame_sample_rate)
+        end_idx = np.random.randint(converted_len, seg_len)
+        start_idx = end_idx - converted_len
+        indices = np.linspace(start_idx, end_idx, num=clip_len)
+        indices = np.clip(indices, start_idx, end_idx - 1).astype(np.int64)
+        return indices
 
     def tokenize(self, x: tp.List[tp.Optional[str]]) -> tp.Dict[str, torch.Tensor]:
-        # TODO: What is the output dim of the tensors???
-        pass
+        # video_len: video total seconds
+        # if current sample doesn't have a certain attribute, replace with empty string
+        entries: tp.List[str] = [xi if xi is not None else "" for xi in x]
+        videos = {"video": [], "attention_mask": []}
+        for v in entries:
+            if v != "":
+                if isinstance(v, str):
+                    container = av.open(v)
+                    indices = self.sample_frame_indices(clip_len=32, frame_sample_rate=1, seg_len=container.streams.video[0].frames)
+                    video = self.read_video_pyav(container=container, indices=indices)
+                    video = list(self.image_processor(list(video), return_tensors="pt").values())[0] # type: ignore
+                    video = video.to(self.device)
+                else:
+                    video = v.to(self.device)
+
+                videos["video"].append(video)
+                videos['attention_mask'].append(1)
+            else:
+                if self.training:
+                    video = torch.zeros(self.video_len, 3, 224, 224).to(self.device)
+                else:
+                    video = torch.zeros(videos["video"][0].shape[0], 3, 224, 224).to(self.device)
+
+                videos["video"].append(video)
+                videos['attention_mask'].append(0)
+        return videos
 
     def forward(self, inputs: tp.Dict[str, torch.Tensor]) -> ConditionType:
-        pass         
-        # TODO embeds = self.output_proj(embeds.to(self.output_proj.weight))
+        mask = inputs['attention_mask']
+        video = inputs['video']
+        video = torch.cat(video, 0) # type: ignore
+
+        with torch.set_grad_enabled(self.finetune):
+            outputs = self.vivit(video)
+            embeds = outputs.logits
+
+        empty_idx = torch.LongTensor([i for i, xi in enumerate(mask) if xi == 0])
+        mask = torch.ones(video.shape[0], self.output_proj.weight.shape[0])
+        mask[empty_idx, :] = 0
+
+        #embeds = embeds.reshape(mask.shape[0], mask.shape[1]) TODO: Conferir como isso rola la no GVMGen
+        embeds = embeds.to(self.output_proj.weight)
+        embeds = self.output_proj(embeds)
+        embeds = (embeds * mask.to(self.device))
+        return embeds.unsqueeze(1), mask.unsqueeze(1)
 
 class WaveformConditioner(BaseConditioner):
     """Base class for all conditioners that take a waveform as input.
@@ -1530,10 +1608,11 @@ class ConditioningProvider(nn.Module):
         conditioners (dict): Dictionary of conditioners.
         device (torch.device or str, optional): Device for conditioners and output condition types.
     """
-    def __init__(self, conditioners: tp.Dict[str, BaseConditioner], device: tp.Union[torch.device, str] = "cpu"):
+    def __init__(self, conditioners: tp.Dict[str, BaseConditioner], device: tp.Union[torch.device, str] = "cpu", cond_type: tp.Optional[str] = "video"):
         super().__init__()
         self.device = device
         self.conditioners = nn.ModuleDict(conditioners)
+        self.cond_type = cond_type
 
     @property
     def joint_embed_conditions(self):
@@ -1546,6 +1625,10 @@ class ConditioningProvider(nn.Module):
     @property
     def text_conditions(self):
         return [k for k, v in self.conditioners.items() if isinstance(v, TextConditioner)]
+
+    @property
+    def video_conditions(self):
+        return [k for k, v in self.conditioners.items() if isinstance(v, VideoConditioner)]
 
     @property
     def wav_conditions(self):
@@ -1570,17 +1653,43 @@ class ConditioningProvider(nn.Module):
         )
 
         output = {}
-        text = self._collate_text(inputs)
+        #text = self._collate_text(inputs)
+
+        if self.cond_type == 'text':
+            text = self._collate_text(inputs)
+            assert set(text.keys()).issubset(set(self.conditioners.keys())), (
+                f"Got an unexpected attribute! Expected {self.conditioners.keys()}, ",
+                f"got {text.keys()}"
+            )
+        elif self.cond_type == 'video':
+            video = self._collate_video(inputs)
+            assert set(video.keys()).issubset(set(self.conditioners.keys())), (
+                f"Got an unexpected attribute! Expected {self.conditioners.keys()}, ",
+                f"got {video.keys()}"
+            )
+        else:
+            raise ValueError(f"Got unexpected type {type} for tokenization!")
+
         wavs = self._collate_wavs(inputs)
         joint_embeds = self._collate_joint_embeds(inputs)
 
-        assert set(text.keys() | wavs.keys() | joint_embeds.keys()).issubset(set(self.conditioners.keys())), (
+        assert set(wavs.keys() | joint_embeds.keys()).issubset(set(self.conditioners.keys())), (
             f"Got an unexpected attribute! Expected {self.conditioners.keys()}, ",
             f"got {text.keys(), wavs.keys(), joint_embeds.keys()}"
         )
 
-        for attribute, batch in chain(text.items(), wavs.items(), joint_embeds.items()):
-            output[attribute] = self.conditioners[attribute].tokenize(batch)
+        # for attribute, batch in chain(text.items(), wavs.items(), joint_embeds.items()):
+        #     output[attribute] = self.conditioners[attribute].tokenize(batch)
+
+        if self.cond_type == 'text':
+            for attribute, batch in chain(text.items(), wavs.items(), joint_embeds.items()):
+                output[attribute] = self.conditioners[attribute].tokenize(batch)
+        elif self.cond_type == 'video':
+            for attribute, batch in chain(video.items(), wavs.items(), joint_embeds.items()):
+                output[attribute] = self.conditioners[attribute].tokenize(batch)
+        else:
+            raise ValueError(f"Got unexpected type {type} for tokenization!")
+
         return output
 
     def forward(self, tokenized: tp.Dict[str, tp.Any]) -> tp.Dict[str, ConditionType]:
@@ -1626,6 +1735,35 @@ class ConditioningProvider(nn.Module):
         for text in texts:
             for condition in self.text_conditions:
                 out[condition].append(text[condition])
+        return out
+
+    def _collate_video(self, samples: tp.List[ConditioningAttributes]) -> tp.Dict[str, tp.List[tp.Optional[str]]]:
+        """Given a list of ConditioningAttributes objects, compile a dictionary where the keys
+        are the attributes and the values are the aggregated input per attribute.
+        For example:
+        Input:
+        [
+            ConditioningAttributes(video={"visual_content": "/data1/1.pt"}, wav=...),
+            ConditioningAttributes(video={"visual_content": "/data1/2.pt"}, wav=...),
+        ]
+        Output:
+        {
+            "visual_content": ["/data1/1.pt", "/data1/2.pt"]
+        }
+
+        Args:
+            samples (list of ConditioningAttributes): List of ConditioningAttributes samples.
+        Returns:
+            dict[str, list[str, optional]]: A dictionary mapping an attribute name to text batch.
+        """
+        out: tp.Dict[str, tp.List[tp.Optional[str]]] = defaultdict(list)
+
+        videos = [x.video for x in samples]
+
+        for video in videos:
+            for condition in self.video_conditions:
+                out[condition].append(video[condition])
+
         return out
 
     def _collate_wavs(self, samples: tp.List[ConditioningAttributes]) -> tp.Dict[str, WavCondition]:

@@ -4,7 +4,7 @@
 
 export AUDIOCRAFT_TEAM=default
 export USER=vivit_felipe
-export CUDA_VISIBLE_DEVICES=5
+export CUDA_VISIBLE_DEVICES=4
 
 # /app/xps/audiocraft_felipe/ => default path
 

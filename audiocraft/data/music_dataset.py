@@ -46,6 +46,7 @@ class MusicInfo(AudioInfo):
     moods: tp.Optional[list] = None
     keywords: tp.Optional[list] = None
     description: tp.Optional[str] = None
+    video: tp.Optional[str] = None
     name: tp.Optional[str] = None
     instrument: tp.Optional[str] = None
     # original wav accompanying the metadata
@@ -66,6 +67,8 @@ class MusicInfo(AudioInfo):
             elif key == 'joint_embed':
                 for embed_attribute, embed_cond in value.items():
                     out.joint_embed[embed_attribute] = embed_cond
+            elif key == 'video':
+                out.video[key] = value
             else:
                 if isinstance(value, list):
                     value = ' '.join(value)
@@ -82,7 +85,7 @@ class MusicInfo(AudioInfo):
             preprocess_func = get_keyword_list
         elif attribute in ['genre', 'name', 'instrument']:
             preprocess_func = get_keyword
-        elif attribute in ['title', 'artist', 'description']:
+        elif attribute in ['title', 'artist', 'description', 'video']:
             preprocess_func = get_string
         else:
             preprocess_func = None
@@ -256,7 +259,7 @@ class MusicDataset(InfoAudioDataset):
                 sample_rate=[info.sample_rate], path=[info.meta.path], seek_time=[info.seek_time])
             music_info.joint_embed[att] = joint_embed_cond
 
-        #print(music_info)
+        #print(f"\n-----> MusicDataset music_info: {music_info} \n")
 
         return wav, music_info
 

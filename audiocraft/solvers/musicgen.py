@@ -168,7 +168,7 @@ class MusicGenSolver(base.StandardSolver):
         # instantiate LM model
         self.model: models.LMModel = models.builders.get_lm_model(self.cfg).to(self.device)
         #print("############################################################################")
-        print(f"self.model:\n{self.model}")
+        #print(f"self.model:\n{self.model}")
         #print("############################################################################")
         #print(f"self.model state_dict:\n{self.model.state_dict().keys()}") 
         # initialize optimization
@@ -301,10 +301,13 @@ class MusicGenSolver(base.StandardSolver):
             audio = None
             # In that case the batch will be a tuple coming from the _cached_batch_writer bit below.
             infos, = batch  # type: ignore
+
             assert all([isinstance(info, AudioInfo) for info in infos])
             assert all([info.audio_tokens is not None for info in infos])  # type: ignore
+
             audio_tokens = torch.stack([info.audio_tokens for info in infos]).to(self.device)  # type: ignore
             audio_tokens = audio_tokens.long()
+
             for info in infos:
                 if isinstance(info, MusicInfo):
                     # Careful here, if you want to use this condition_wav (e.b. chroma conditioning),
@@ -369,7 +372,11 @@ class MusicGenSolver(base.StandardSolver):
                 info.audio_tokens = one_audio_tokens.short().cpu()
             self._cached_batch_writer.save(infos)
 
-        return condition_tensors, audio_tokens, padding_mask
+        #TODO: Why the F GVMGen return attributes directly isntead of condition tensors???
+        #TODO: Why the F when tokenized = self.model.condition_provider.tokenize(attributes) is called, my ViViTConditioner tokenize function is not called
+        #print(f" ---> _prepare_tokens_and_attributes, condition_tensors:\n {condition_tensors}")
+
+        return attributes, audio_tokens, padding_mask
 
     def run_step(self, idx: int, batch: tp.Tuple[torch.Tensor, tp.List[SegmentWithAttributes]], metrics: dict) -> dict:
         """Perform one training or valid step on a given batch."""
@@ -389,7 +396,7 @@ class MusicGenSolver(base.StandardSolver):
                 if isinstance(self.model.condition_provider.conditioners.self_wav, StyleConditioner):
                     style_mask = self.model.condition_provider.conditioners.self_wav.mask
 
-            model_output = self.model.compute_predictions(audio_tokens, [], condition_tensors)  # type: ignore
+            model_output = self.model.compute_predictions(audio_tokens, condition_tensors)
             logits = model_output.logits
             if style_mask is not None:
                 mask = padding_mask & model_output.mask & style_mask
@@ -656,7 +663,6 @@ class MusicGenSolver(base.StandardSolver):
 
     def evaluate_audio_generation(self) -> dict:
         """Evaluate audio generation with off-the-shelf metrics."""
-        print("@@@@@ solvers.musicgen.MusicGenSolver.evaluate_audio_generation")
         evaluate_stage_name = f'{self.current_stage}_generation'
 
         # instantiate evaluation metrics, if at least one metric is defined, run audio generation evaluation
@@ -848,7 +854,6 @@ class MusicGenSolver(base.StandardSolver):
 
     def evaluate(self) -> dict:
         """Evaluate stage."""
-        print("@@@@@ solvers.musicgen.MusicGenSolver.evaluate")
         self.model.eval()
         with torch.no_grad():
             metrics: dict = {}

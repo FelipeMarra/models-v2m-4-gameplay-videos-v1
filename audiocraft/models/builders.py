@@ -171,8 +171,6 @@ def get_conditioner_provider(
                 **model_args
             )
         elif model_type == 'video':
-            print("---> GETTING ViViTConditioner")
-            print(f"---> outdim: {output_dim} | device {device} | model args {model_args}")
             conditioners[str(cond)] = ViViTConditioner(
                 output_dim=output_dim,
                 device=device,

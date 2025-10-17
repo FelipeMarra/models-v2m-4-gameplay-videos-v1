@@ -25,6 +25,7 @@ import torch
 from torch import nn
 import torch.nn.functional as F
 from torch.nn.utils.rnn import pad_sequence
+import torchvision
 from enum import Enum
 from .chroma import ChromaExtractor
 from .streaming import StreamingModule
@@ -545,7 +546,8 @@ class ViViTConditioner(VideoConditioner):
         "google/vivit-b-16x2-kinetics400": 768,
     }
 
-    def __init__(self, name: str, output_dim: int, finetune:bool, device:str, video_len:int=32):
+    def __init__(self, name: str, output_dim: int, finetune:bool, device:str, 
+                autocast_dtype: tp.Optional[str] = 'float32', video_len:int=32):
         assert name in self.MODELS, f"Unrecognized ViViT model name (should in {self.MODELS})"
 
         super().__init__(self.MODELS_DIMS[name], output_dim)
@@ -555,9 +557,23 @@ class ViViTConditioner(VideoConditioner):
         self.finetune = finetune
         self.video_len = video_len
 
-        # TODO: autocast?
+        if autocast_dtype is None or self.device == 'cpu':
+            self.autocast = TorchAutocast(enabled=False)
+            if self.device != 'cpu':
+                logger.warning("ViViT has no autocast, this might lead to NaN")
+        else:
+            dtype = getattr(torch, autocast_dtype)
+            assert isinstance(dtype, torch.dtype)
+            logger.info(f"ViViT will be evaluated with autocast as {autocast_dtype}")
+            self.autocast = TorchAutocast(enabled=True, device_type=self.device, dtype=dtype)
 
         self.image_processor = VivitImageProcessor.from_pretrained(name)
+        #print(f"VivitImageProcessor: {self.image_processor.to_dict()}")
+        #VivitImageProcessor: {'_processor_class': None, 'image_processor_type': 'VivitImageProcessor', 
+        #'do_resize': True, 'size': {'shortest_edge': 224}, 'do_center_crop': True, 
+        #'crop_size': {'height': 224, 'width': 224}, 'resample': 2, 'do_rescale': True, 
+        #'rescale_factor': 0.00784313725490196, 'offset': True, 'do_normalize': True, 
+        #'image_mean': [0.5, 0.5, 0.5], 'image_std': [0.5, 0.5, 0.5]}
         vivit = VivitModel.from_pretrained(name).train(mode=finetune) # type: ignore
 
         if finetune:
@@ -586,22 +602,41 @@ class ViViTConditioner(VideoConditioner):
                 frames.append(frame)
         return np.stack([x.to_ndarray(format="rgb24") for x in frames])
 
-    def sample_frame_indices(self, clip_len, frame_sample_rate, seg_len):
+    def write_video(self, file_name, frame_rate, video_tensor):
+        """
+            For debugging
+        """
+        # Def not sufficient to bring the image back to the original pixel values
+        # after the ImageProcessor stuff, but enough to get an ideia if it is working
+        video_tensor = (video_tensor.squeeze() * 255).clamp(0, 255).to(torch.uint8)
+        video_tensor = video_tensor.permute(0, 2, 3, 1)
+        torchvision.io.write_video(f'{file_name}.mp4', video_tensor, frame_rate)
+
+    def sample_frame_indices(self, clip_len, seg_len):
         '''
         Sample a given number of frame indices from the video.
+        We set a window of a random size and position and sample frames linearly spaced.
+        The window size is set so that the stride is at leat 2, that is, we sample
+        at least every 2 frames. 
+        Since our videos have 300 frames and ViViT asks for 32, we can sample at most
+        every 9 frames.
         Args:
             clip_len (`int`): Total number of frames to sample.
-            frame_sample_rate (`int`): Sample every n-th frame.
             seg_len (`int`): Maximum allowed index of sample's last frame.
         Returns:
             indices (`list[int]`): List of sampled frame indices
         '''
-        converted_len = int(clip_len * frame_sample_rate)
-        end_idx = np.random.randint(converted_len, seg_len)
+        frame_sample_rate = np.random.randint(2, 10) # rand between 2 and 9
+        converted_len = int(clip_len * frame_sample_rate) # 32 * 2-9 -> 64-288
+        end_idx = np.random.randint(converted_len, seg_len) # end at rand between 64-288 and 299
+        # start from rand end - 64
         start_idx = end_idx - converted_len
+        # start from rand end minus 64-288 until rand end -> 
+        # range from 0 to 299 lin spaced -> step frame_sample_rate
         indices = np.linspace(start_idx, end_idx, num=clip_len)
         indices = np.clip(indices, start_idx, end_idx - 1).astype(np.int64)
-        return indices
+        window_duration = (end_idx-start_idx)/30
+        return indices, window_duration
 
     def tokenize(self, x: tp.List[tp.Optional[str]]) -> tp.Dict[str, torch.Tensor]:
         # video_len: video total seconds
@@ -612,9 +647,12 @@ class ViViTConditioner(VideoConditioner):
             if v != "":
                 if isinstance(v, str):
                     container = av.open(v)
-                    indices = self.sample_frame_indices(clip_len=32, frame_sample_rate=1, seg_len=container.streams.video[0].frames)
+                    indices, window_duration = self.sample_frame_indices(clip_len=32, seg_len=container.streams.video[0].frames)
                     video = self.read_video_pyav(container=container, indices=indices)
                     video = list(self.image_processor(list(video), return_tensors="pt").values())[0] # type: ignore
+                    # file_name = v.split('.')[0].split('/')[-1]
+                    # frame_rate = self.video_len/window_duration
+                    # self.write_video(file_name, frame_rate, video.squeeze())
                     video = video.to(self.device)
                 else:
                     video = v.to(self.device)
@@ -636,7 +674,7 @@ class ViViTConditioner(VideoConditioner):
         video = inputs['video']
         video = torch.cat(video, 0) # type: ignore
 
-        with torch.set_grad_enabled(self.finetune):
+        with torch.set_grad_enabled(self.finetune), self.autocast:
             outputs = self.vivit(video)
             embeds = outputs.pooler_output
 

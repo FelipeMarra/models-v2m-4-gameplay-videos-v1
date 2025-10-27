@@ -1,17 +1,15 @@
 #!/bin/bash
 
 export AUDIOCRAFT_TEAM=default
-export USER=vivit_felipe # Will create an audiocraft_felipe folder inside checkpoints
-export CUDA_VISIBLE_DEVICES=1
+export USER=vivit_felipe # Will create an audiocraft_vivit_felipe folder inside checkpoints
+export CUDA_VISIBLE_DEVICES="1,4,5"
 
 dora -P audiocraft run -d \
     fsdp.use=false \
     autocast=true \
-    solver=musicgen/musicgen_base_32khz \
+    solver=musicgen/musicgen_video_32khz \
     model/lm/model_scale=medium \
-    conditioner=text2music \
-    conditioners.description.t5.name=t5-base \
-    conditioners.description.t5.finetune=false \
+    conditioner=video2music \
     dset=snes_mvdb \
     dataset.num_workers=6 \
     dataset.batch_size=6 \

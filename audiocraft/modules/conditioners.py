@@ -612,7 +612,7 @@ class ViViTConditioner(VideoConditioner):
         video_tensor = video_tensor.permute(0, 2, 3, 1)
         torchvision.io.write_video(f'{file_name}.mp4', video_tensor, frame_rate)
 
-    def sample_frame_indices(self, clip_len, seg_len):
+    def sample_frame_indices_random_fr(self, video_path, clip_len, seg_len):
         '''
         Sample a given number of frame indices from the video.
         We set a window of a random size and position and sample frames linearly spaced.
@@ -626,7 +626,15 @@ class ViViTConditioner(VideoConditioner):
         Returns:
             indices (`list[int]`): List of sampled frame indices
         '''
-        frame_sample_rate = np.random.randint(2, 10) # rand between 2 and 9
+        max_fr = np.ceil(seg_len/clip_len) # amout of frames vary a bit
+        min_fr = 2
+
+        try:
+            frame_sample_rate = np.random.randint(min_fr, max_fr) # rand between 2 and 9 (for 300 frames)
+        except:
+            logger.error(f"Video {video_path} has len of only {seg_len} and should be removed from the dataset")
+            frame_sample_rate=1
+
         converted_len = int(clip_len * frame_sample_rate) # 32 * 2-9 -> 64-288
         end_idx = np.random.randint(converted_len, seg_len) # end at rand between 64-288 and 299
         # start from rand end - 64
@@ -638,6 +646,29 @@ class ViViTConditioner(VideoConditioner):
         window_duration = (end_idx-start_idx)/30
         return indices, window_duration
 
+    def sample_frame_indices(self, video_path, clip_len, frame_sample_rate, seg_len):
+        '''
+        Sample a given number of frame indices from the video.
+        Args:
+            clip_len (`int`): Total number of frames to sample.
+            frame_sample_rate (`int`): Sample every n-th frame.
+            seg_len (`int`): Maximum allowed index of sample's last frame.
+        Returns:
+            indices (`list[int]`): List of sampled frame indices
+        '''
+        try:
+            converted_len = int(clip_len * frame_sample_rate)
+            end_idx = np.random.randint(converted_len, seg_len) # rand between 64 and 300 (for videos with 300 frames)
+        except:
+            logger.error(f"Video {video_path} has len of only {seg_len} and should be removed from the dataset")
+            converted_len = clip_len
+            end_idx = np.random.randint(converted_len, seg_len) # rand between 32 and ??? (for videos with less than 64 frames, that should be remove from the dataset)
+
+        start_idx = end_idx - converted_len
+        indices = np.linspace(start_idx, end_idx, num=clip_len)
+        indices = np.clip(indices, start_idx, end_idx - 1).astype(np.int64)
+        return indices
+
     def tokenize(self, x: tp.List[tp.Optional[str]]) -> tp.Dict[str, torch.Tensor]:
         # video_len: video total seconds
         # if current sample doesn't have a certain attribute, replace with empty string
@@ -647,7 +678,8 @@ class ViViTConditioner(VideoConditioner):
             if v != "":
                 if isinstance(v, str):
                     container = av.open(v)
-                    indices, window_duration = self.sample_frame_indices(clip_len=32, seg_len=container.streams.video[0].frames)
+                    #indices, window_duration = self.sample_frame_indices(v, clip_len=32, seg_len=container.streams.video[0].frames)
+                    indices = self.sample_frame_indices(video_path=v, clip_len=32, frame_sample_rate=2, seg_len=container.streams.video[0].frames)
                     video = self.read_video_pyav(container=container, indices=indices)
                     video = list(self.image_processor(list(video), return_tensors="pt").values())[0] # type: ignore
                     # file_name = v.split('.')[0].split('/')[-1]
@@ -676,17 +708,17 @@ class ViViTConditioner(VideoConditioner):
 
         with torch.set_grad_enabled(self.finetune), self.autocast:
             outputs = self.vivit(video)
-            embeds = outputs.pooler_output
+            embeds = outputs.last_hidden_state
 
         empty_idx = torch.LongTensor([i for i, xi in enumerate(mask) if xi == 0])
-        mask = torch.ones(video.shape[0], self.output_proj.weight.shape[0])
+        mask = torch.ones(embeds.shape[0], embeds.shape[1])
         mask[empty_idx, :] = 0
 
-        #embeds = embeds.reshape(mask.shape[0], mask.shape[1]) TODO: Conferir como isso rola la no GVMGen
         embeds = embeds.to(self.output_proj.weight)
         embeds = self.output_proj(embeds)
-        embeds = (embeds * mask.to(self.device))
-        return embeds.unsqueeze(1), mask.unsqueeze(1)
+        embeds = (embeds * mask.unsqueeze(-1).to(self.device))
+
+        return embeds, mask
 
 class WaveformConditioner(BaseConditioner):
     """Base class for all conditioners that take a waveform as input.

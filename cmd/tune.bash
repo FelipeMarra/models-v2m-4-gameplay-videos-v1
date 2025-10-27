@@ -7,12 +7,10 @@ export CUDA_VISIBLE_DEVICES=1
 dora -P audiocraft run -d \
     fsdp.use=false \
     autocast=true \
-    solver=musicgen/musicgen_base_32khz \
+    solver=musicgen/musicgen_video_32khz \
     model/lm/model_scale=medium \
     continue_from=//pretrained/facebook/musicgen-medium \
-    conditioner=text2music \
-    conditioners.description.t5.name=t5-base \
-    conditioners.description.t5.finetune=true \
+    conditioner=video2music \
     dset=snes_mvdb \
     dataset.num_workers=6 \
     dataset.batch_size=6 \

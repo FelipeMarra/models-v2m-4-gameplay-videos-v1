@@ -14,12 +14,10 @@ export TF_LIBRARY_PATH="$CONDA_ENV_DIR/fad/lib/python3.10/site-packages/nvidia/c
 dora -P audiocraft run \
     fsdp.use=false \
     autocast=true \
-    solver=musicgen/musicgen_base_32khz \
+    solver=musicgen/musicgen_video_32khz \
     model/lm/model_scale=medium \
-    continue_from=/app/xps/audiocraft_felipe/xps/5aa5e26a_medium_random_no_t5 \
-    conditioner=text2music \
-    conditioners.description.t5.name=t5-base \
-    conditioners.description.t5.finetune=true \
+    continue_from=//pretrained/facebook/musicgen-medium \
+    conditioner=video2music \
     dset=snes_mvdb \
     dataset.num_workers=4 \
     dataset.batch_size=32 \

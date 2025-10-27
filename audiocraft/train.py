@@ -38,6 +38,7 @@ def resolve_config_dset_paths(cfg):
 def get_solver(cfg):
     from . import solvers
     # Convert batch size to batch size for each GPU
+    print(f"cfg.dataset.batch_size: {cfg.dataset.batch_size} | flashy.distrib.world_size(): {flashy.distrib.world_size()}")
     assert cfg.dataset.batch_size % flashy.distrib.world_size() == 0
     cfg.dataset.batch_size //= flashy.distrib.world_size()
     for split in ['train', 'valid', 'evaluate', 'generate']:

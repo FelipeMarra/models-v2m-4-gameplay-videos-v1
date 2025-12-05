@@ -26,6 +26,7 @@ from torch import nn
 import torch.nn.functional as F
 from torch.nn.utils.rnn import pad_sequence
 import torchvision
+from torchvision.transforms import v2
 from enum import Enum
 from .chroma import ChromaExtractor
 from .streaming import StreamingModule
@@ -533,6 +534,23 @@ class T5Conditioner(TextConditioner):
 
         return embeds, mask
 
+class SNESViViTImageProcessor():
+    def __init__(self, normalize:bool) -> None:
+        self.normalize = normalize
+
+        self.compose = v2.Compose([
+            v2.RandomResizedCrop(size=(224, 224), antialias=True),
+            v2.RandomHorizontalFlip(p=0.5),
+        ])
+
+    def __call__(self, videos:torch.Tensor) -> torch.Tensor:
+        videos = self.compose(videos)
+
+        if self.normalize:
+            videos = videos / 255
+
+        return videos
+
 class VideoConditioner(BaseConditioner):
     ...
 
@@ -567,13 +585,8 @@ class ViViTConditioner(VideoConditioner):
             logger.info(f"ViViT will be evaluated with autocast as {autocast_dtype}")
             self.autocast = TorchAutocast(enabled=True, device_type=self.device, dtype=dtype)
 
-        self.image_processor = VivitImageProcessor.from_pretrained(name)
-        #print(f"VivitImageProcessor: {self.image_processor.to_dict()}")
-        #VivitImageProcessor: {'_processor_class': None, 'image_processor_type': 'VivitImageProcessor', 
-        #'do_resize': True, 'size': {'shortest_edge': 224}, 'do_center_crop': True, 
-        #'crop_size': {'height': 224, 'width': 224}, 'resample': 2, 'do_rescale': True, 
-        #'rescale_factor': 0.00784313725490196, 'offset': True, 'do_normalize': True, 
-        #'image_mean': [0.5, 0.5, 0.5], 'image_std': [0.5, 0.5, 0.5]}
+        self.image_processor = SNESViViTImageProcessor(normalize=True)
+
         vivit = VivitModel.from_pretrained(name).train(mode=finetune) # type: ignore
 
         if finetune:
@@ -589,7 +602,7 @@ class ViViTConditioner(VideoConditioner):
             container (`av.container.input.InputContainer`): PyAV container.
             indices (`list[int]`): List of frame indices to decode.
         Returns:
-            result (np.ndarray): np array of decoded frames of shape (num_frames, height, width, 3).
+            result (torch.Tensor):tensor of decoded frames of shape (num_frames, 3, height, width).
         '''
         frames = []
         container.seek(0)
@@ -600,7 +613,9 @@ class ViViTConditioner(VideoConditioner):
                 break
             if i >= start_index and i in indices:
                 frames.append(frame)
-        return np.stack([x.to_ndarray(format="rgb24") for x in frames])
+        video = torch.stack([torch.from_numpy(x.to_ndarray(format="rgb24")) for x in frames])
+        video = video.permute(0, 3, 1, 2)
+        return video
 
     def write_video(self, file_name, frame_rate, video_tensor):
         """
@@ -608,7 +623,6 @@ class ViViTConditioner(VideoConditioner):
         """
         # Def not sufficient to bring the image back to the original pixel values
         # after the ImageProcessor stuff, but enough to get an ideia if it is working
-        video_tensor = (video_tensor.squeeze() * 255).clamp(0, 255).to(torch.uint8)
         video_tensor = video_tensor.permute(0, 2, 3, 1)
         torchvision.io.write_video(f'{file_name}.mp4', video_tensor, frame_rate)
 
@@ -681,11 +695,14 @@ class ViViTConditioner(VideoConditioner):
                     #indices, window_duration = self.sample_frame_indices(v, clip_len=32, seg_len=container.streams.video[0].frames)
                     indices = self.sample_frame_indices(video_path=v, clip_len=32, frame_sample_rate=2, seg_len=container.streams.video[0].frames)
                     video = self.read_video_pyav(container=container, indices=indices)
-                    video = list(self.image_processor(list(video), return_tensors="pt").values())[0] # type: ignore
+                    video = self.image_processor(video)
+
+                    # Save video to test augs
                     # file_name = v.split('.')[0].split('/')[-1]
-                    # frame_rate = self.video_len/window_duration
+                    # frame_rate = 32 #self.video_len/(window_duration)
                     # self.write_video(file_name, frame_rate, video.squeeze())
-                    video = video.to(self.device)
+
+                    video = video.to(self.device).unsqueeze(0)
                 else:
                     video = v.to(self.device)
 
@@ -693,21 +710,23 @@ class ViViTConditioner(VideoConditioner):
                 videos['attention_mask'].append(1)
             else:
                 if self.training:
-                    video = torch.zeros(self.video_len, 3, 224, 224).to(self.device)
+                    video = torch.zeros(1, self.video_len, 3, 224, 224).to(self.device)
                 else:
-                    video = torch.zeros(videos["video"][0].shape[0], 3, 224, 224).to(self.device)
+                    video = torch.zeros(1, videos["video"][0].shape[1], 3, 224, 224).to(self.device)
 
                 videos["video"].append(video)
                 videos['attention_mask'].append(0)
+
         return videos
 
     def forward(self, inputs: tp.Dict[str, torch.Tensor]) -> ConditionType:
         mask = inputs['attention_mask']
-        video = inputs['video']
-        video = torch.cat(video, 0) # type: ignore
+        videos = inputs['video']
+        videos = torch.cat(videos, 0).float() # type: ignore
+        #print(f"videos: {videos.shape}")
 
         with torch.set_grad_enabled(self.finetune), self.autocast:
-            outputs = self.vivit(video)
+            outputs = self.vivit(videos)
             embeds = outputs.last_hidden_state
 
         empty_idx = torch.LongTensor([i for i, xi in enumerate(mask) if xi == 0])

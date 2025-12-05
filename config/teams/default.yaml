@@ -1,12 +1,12 @@
 default:
-  dora_dir: /app/xps/audiocraft_${oc.env:USER}
+  dora_dir: /home/es119256/dados/xps/audiocraft_${oc.env:USER}
   partitions:
     global: debug
     team: debug
-  reference_dir: /app/xps
+  reference_dir: /home/es119256/dados/xps
 darwin:  # if we detect we are on a Mac, then most likely we are doing unit testing etc.
-  dora_dir: /app/xps/audiocraft_${oc.env:USER}
+  dora_dir: /home/es119256/dados/xps/audiocraft_${oc.env:USER}
   partitions:
     global: debug
     team: debug
-  reference_dir: /app/xps
+  reference_dir: /home/es119256/dados/xps

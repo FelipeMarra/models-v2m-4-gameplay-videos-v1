@@ -2,9 +2,9 @@ import os
 import json
 import matplotlib.pyplot as plt
 
-XP_PATH = "/app/xps/audiocraft_felipe/xps/4f2637cb_multi_desc_sum_new_split"
-HISTORY_PATH = os.path.join(XP_PATH, "history.json")
-SAVE_PATH = os.path.join(XP_PATH, "history")
+XP_PATH = "/app/xps/audiocraft_gvmgen/xps/524c0212"
+HISTORY_PATH = os.path.join(XP_PATH, "history_copy.json")
+SAVE_PATH = os.path.join(XP_PATH, "history_copy")
 METRICS = ['ce', 'ppl']
 
 def main():
@@ -37,7 +37,7 @@ def main():
         plt.plot(results[metric]['train'])
         plt.plot(results[metric]['valid'])
 
-        plt.xticks(range(0, 75, 2))
+        plt.xticks(range(0, 130, 4))
 
         plt.grid()
 

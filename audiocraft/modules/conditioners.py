@@ -587,7 +587,18 @@ class ViViTConditioner(VideoConditioner):
 
         self.image_processor = SNESViViTImageProcessor(normalize=True)
 
-        vivit = VivitModel.from_pretrained(name).train(mode=finetune) # type: ignore
+        vivit_config = VivitModel.config_class.from_pretrained(name)
+        print(f"ViViT CONFIG INSIDE VIVIT CONDITIONER\n{vivit_config}")
+
+        vivit_config.update(
+            {
+                "num_hidden_layers": 6
+                #"num_attention_heads": 6
+            }
+        )
+        print(f"ViViT CONFIG INSIDE VIVIT CONDITIONER MODIFIED\n{vivit_config}")
+
+        vivit = VivitModel.from_pretrained(name, config=vivit_config).train(mode=finetune) # type: ignore
 
         if finetune:
             self.vivit = vivit

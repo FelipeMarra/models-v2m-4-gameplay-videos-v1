@@ -2,7 +2,7 @@ import os
 import json
 import matplotlib.pyplot as plt
 
-XP_PATH = "/app/xps/audiocraft_gvmgen/xps/524c0212"
+XP_PATH = "/home/es119256/dados/xps/audiocraft_vivit_felipe/xps/fake/"
 HISTORY_PATH = os.path.join(XP_PATH, "history_copy.json")
 SAVE_PATH = os.path.join(XP_PATH, "history_copy")
 METRICS = ['ce', 'ppl']
@@ -37,7 +37,7 @@ def main():
         plt.plot(results[metric]['train'])
         plt.plot(results[metric]['valid'])
 
-        plt.xticks(range(0, 130, 4))
+        plt.xticks(range(0, 51, 4))
 
         plt.grid()
 

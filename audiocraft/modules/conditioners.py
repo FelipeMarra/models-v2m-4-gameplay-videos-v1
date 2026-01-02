@@ -565,7 +565,8 @@ class ViViTConditioner(VideoConditioner):
     }
 
     def __init__(self, name: str, output_dim: int, finetune:bool, device:str, 
-                autocast_dtype: tp.Optional[str] = 'float32', video_len:int=32):
+                autocast_dtype: tp.Optional[str] = 'float32', video_len:int=32, 
+                num_hidden_layers:int=12, num_attention_heads:int=12):
         assert name in self.MODELS, f"Unrecognized ViViT model name (should in {self.MODELS})"
 
         super().__init__(self.MODELS_DIMS[name], output_dim)
@@ -587,19 +588,19 @@ class ViViTConditioner(VideoConditioner):
 
         self.image_processor = SNESViViTImageProcessor(normalize=True)
 
-        # vivit_config = VivitModel.config_class.from_pretrained(name)
+        vivit_config = VivitModel.config_class.from_pretrained(name)
         # print(f"ViViT CONFIG INSIDE VIVIT CONDITIONER\n{vivit_config}")
 
-        # vivit_config.update(
-        #     {
-        #         "num_hidden_layers": 6
-        #         #"num_attention_heads": 6
-        #     }
-        # )
-        # print(f"ViViT CONFIG INSIDE VIVIT CONDITIONER MODIFIED\n{vivit_config}")
+        vivit_config.update(
+            {
+                "num_hidden_layers": num_hidden_layers,
+                "num_attention_heads": num_attention_heads
+            }
+        )
+        print(f"ViViT CONFIG INSIDE VIVIT CONDITIONER MODIFIED\n{vivit_config}")
 
-        # vivit = VivitModel.from_pretrained(name, config=vivit_config).train(mode=finetune) # type: ignore
-        vivit = VivitModel.from_pretrained(name).train(mode=finetune) # type: ignore
+        vivit = VivitModel.from_pretrained(name, config=vivit_config).train(mode=finetune) # type: ignore
+        #vivit = VivitModel.from_pretrained(name).train(mode=finetune) # type: ignore
 
         if finetune:
             self.vivit = vivit

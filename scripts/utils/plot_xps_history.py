@@ -37,7 +37,7 @@ def main():
         plt.plot(results[metric]['train'])
         plt.plot(results[metric]['valid'])
 
-        plt.xticks(range(0, 51, 4))
+        plt.xticks(range(0, 119, 4))
 
         plt.grid()
 
@@ -47,7 +47,13 @@ def main():
         plt.savefig(f"{SAVE_PATH}/{metric}.png")
         plt.clf()
 
-    os.rename(HISTORY_PATH, f"{SAVE_PATH}/history.json")
+    # os.rename(HISTORY_PATH, f"{SAVE_PATH}/history.json")
+
+    metric = 'ce'
+    indexes = range(len(results[metric]['valid']))
+    indexes = sorted(indexes, key=lambda x: results[metric]['valid'][x])
+    print(f"Best Valid Epoch: {indexes[0]+1}, with value {results[metric]['valid'][indexes[0]]}")
+    print(f"Worst Valid Epoch: {indexes[-1]+1}, with value {results[metric]['valid'][indexes[-1]]}")
 
 if __name__ == "__main__":
     main()

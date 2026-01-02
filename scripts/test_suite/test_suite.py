@@ -43,7 +43,7 @@ def read_dataset_split(dataset_split_path:str, genres_path:str) -> list[dict[str
         with open(json_path, 'r') as f:
             general_json_dict = json.load(f)
 
-            json_dict['game'] = general_json_dict['video'].split('/')[4]
+            json_dict['game'] = general_json_dict['name'].split('_')[0]
             json_dict['genre'] = get_genre(genres_df, json_dict['game'])
             json_dict['video'] = general_json_dict['video']
             json_dict['audio'] = os.path.join(dataset_split_path, general_json_dict['name'])
@@ -55,7 +55,7 @@ def read_dataset_split(dataset_split_path:str, genres_path:str) -> list[dict[str
 
 def get_one_sample_per_game(samples_dicts:list[dict[str, str]]) -> list[dict[str, str]]:
     # dumb dict in order to process the last game in the samples_dicts list
-    none_dict = {'video': "/app/dataset/nintendo-snes-spc/NONE"}
+    none_dict = {'game': "NONE"}
     samples_dicts.append(none_dict)
 
     choosen_samples:list[dict[str, str]] = []
@@ -64,7 +64,7 @@ def get_one_sample_per_game(samples_dicts:list[dict[str, str]]) -> list[dict[str
     game_dicts = []
 
     for sample_dict in samples_dicts:
-        game = sample_dict['video'].split('/')[4]
+        game = sample_dict['game']
 
         if current_game == '':
             current_game = game
@@ -120,10 +120,12 @@ def run_inference(samples_dicts:list[dict[str, str]], model_sig, base_path:str):
             with open(desc_path, 'w') as f:
                 f.write(desc)
 
+        vid = sample_dict['video']
+
         # Generate sountrack
         gen_sdtk = vid_folder_path + f'/{vid_name}_gen'
         if not os.path.exists(gen_sdtk):
-            run_inference_musicgen(model_sig, desc, gen_sdtk, checkpoint_path)
+            run_inference_musicgen(model_sig, desc, vid, gen_sdtk, checkpoint_path)
 
         video_mp = mp.VideoFileClip(vid_path)
         audio_clip = AudioSegment.from_wav(gen_sdtk+'.wav')
@@ -147,11 +149,11 @@ def run_inference(samples_dicts:list[dict[str, str]], model_sig, base_path:str):
 
 def main():
     # Parse arguments
-    parser = argparse.ArgumentParser(description='2. manifest.py')
-    parser.add_argument('--base_path', type=str, default="/app/xps/checkpoints_and_inference", help="path to folder where results will be stored")
-    parser.add_argument('--genres_path', type=str, default="/app/dataset/deepseek_genres.csv", help="path to games genres csv")
+    parser = argparse.ArgumentParser()
+    parser.add_argument('--base_path', type=str, default="/home/es119256/dados/xps/checkpoints_and_inference", help="path to folder where results will be stored")
+    parser.add_argument('--genres_path', type=str, default="/home/es119256/dados/datasets/vmdb_3/deepseek_genres.csv", help="path to games genres csv")
     parser.add_argument('--split', type=str, default="test", help="split to be accessed in dataset/snes_mvdb/SPLIT")
-    parser.add_argument('--converted_dataset', type=str, default="/app/code/dataset", help="path to audiocraft/dataset. snes_mvdb will be added to access the converted dataset")
+    parser.add_argument('--converted_dataset', type=str, default="/home/es119256/dados/repos/visual-bardo-video/dataset", help="path to audiocraft/dataset. snes_mvdb will be added to access the converted dataset")
     parser.add_argument('--model_sig', type=str, default="5aa5e26a_medium_random_no_t5", help="path to checkpoint")
     parser.add_argument('--is_vanilla', type=bool, default=False, help="If True model_checkpoint will be facebook/musicgen-medium")
 

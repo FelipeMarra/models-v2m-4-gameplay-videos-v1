@@ -37,7 +37,7 @@ def export_musicgen_tune(sig:str, base_save_path:str) -> str:
 
     return base_save_path
 
-def run_inference_musicgen(sig:str, desc, save_path, checkpoint_path):
+def run_inference_musicgen(sig:str, desc, vid, save_path, checkpoint_path):
     model_path = sig
 
     if not sig.startswith("facebook/"):
@@ -48,6 +48,6 @@ def run_inference_musicgen(sig:str, desc, save_path, checkpoint_path):
         duration=11,
     )
 
-    wave = musicgen.generate([desc])[0]
+    wave = musicgen.generate([desc], [vid])[0]
 
     audio_write(save_path, wave.cpu(), musicgen.sample_rate, strategy="loudness", loudness_compressor=True)

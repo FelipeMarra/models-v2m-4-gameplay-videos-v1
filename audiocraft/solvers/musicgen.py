@@ -168,13 +168,13 @@ class MusicGenSolver(base.StandardSolver):
         # instantiate LM model
         self.model: models.LMModel = models.builders.get_lm_model(self.cfg).to(self.device)
 
-        print("\n############################################################################")
-        print(f"self.model:\n{self.model}")
-        print("############################################################################\n")
+        # print("\n############################################################################")
+        # print(f"self.model:\n{self.model}")
+        # print("############################################################################\n")
 
-        print("\n############################################################################")
-        print(f"self.model state_dict:\n{self.model.state_dict().keys()}") 
-        print("############################################################################\n")
+        # print("\n############################################################################")
+        # print(f"self.model state_dict:\n{self.model.state_dict().keys()}") 
+        # print("############################################################################\n")
 
         # initialize optimization
         self.initialize_optimization()

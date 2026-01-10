@@ -8,7 +8,7 @@ from ..environment import AudioCraftEnvironment
 
 import torch
 import torchmetrics
-from torchmetrics import Accuracy, F1Score, AUROC
+from torchmetrics import MetricCollection, Accuracy, F1Score
 import torch.nn as nn
 
 from ..data.audio_utils import convert_audio
@@ -65,15 +65,10 @@ class GenreClassificationMetrics(torchmetrics.Metric):
     def __init__(self):
         super().__init__()
 
-        self.metrics = {
-            'acc': Accuracy(task='multilabel', average='none', num_labels=len(GENRES)),
-            'f1': F1Score(task='multilabel', average='none', num_labels=len(GENRES))
-        }
-
-        # self.precision = Precision(average=False)
-        # self.recall = Recall(average=False)
-        # self.f1 = (self.precision * self.recall * 2 / (self.precision + self.recall)).mean()
-        # self.roc_auc = ROC_AUC()
+        self.metrics = MetricCollection([
+            Accuracy(task='multilabel', average='none', num_labels=len(GENRES)),
+            F1Score(task='multilabel', average='none', num_labels=len(GENRES))
+        ])
 
     def _get_label_distribution(self, x: torch.Tensor, sizes: torch.Tensor,
                                 sample_rates: torch.Tensor) -> tp.Optional[torch.Tensor]:
@@ -111,19 +106,17 @@ class GenreClassificationMetrics(torchmetrics.Metric):
             gt_labels = [1 if g in gt_labels else 0 for g in GENRES]
             tgt_labels.append(torch.Tensor(gt_labels))
 
-        tgt_labels = torch.stack(tgt_labels, dim=0)
+        tgt_labels = torch.stack(tgt_labels, dim=0).to(self.device)
 
         if preds_probs is not None and tgt_labels is not None:
             assert preds_probs.shape == tgt_labels.shape
-            for metric in self.metrics:
-                self.metrics[metric].update(preds_probs, tgt_labels)
+            self.metrics.update(preds_probs, tgt_labels)
 
     def compute(self) -> dict:
         """Computes metrics in `self.metrics` across all evaluated pred/target pairs."""
-        metrics_names = self.metrics.keys()
-        logger.info(f"Computing {metrics_names} on a total of TODO samples")
+        logger.info(f"Computing {self.metrics.keys()} on a total of TODO samples")
 
-        comp_metrics = {metric_name:self.metrics[metric_name].compute() for metric_name in metrics_names}
+        comp_metrics = self.metrics.compute()
         genre_comp_metrics = {}
 
         for metric in comp_metrics:
@@ -171,7 +164,8 @@ class PaSSTGenreClassificationMetric(GenreClassificationMetrics):
     def _load_genre_checkpoint(self, ckpt_path:str):
         state_dict = torch.load(ckpt_path)
         self.model.load_state_dict(state_dict['model_sate'])
-        self.model.cuda()
+        self.model.eval()
+        self.model.to(self.device)
 
     def _process_audio(self, wav: torch.Tensor, sample_rate: int, wav_len: int) -> tp.List[torch.Tensor]:
         """Process audio to feed to the pretrained model."""
@@ -216,7 +210,7 @@ class PaSSTGenreClassificationMetric(GenreClassificationMetrics):
                     else:
                         probs_batch:torch.Tensor = res # (B, 1)
 
-                return probs_batch.cpu()
+                return probs_batch
 
     def _get_label_distribution(self, x: torch.Tensor, sizes: torch.Tensor,
                                 sample_rates: torch.Tensor) -> tp.Optional[torch.Tensor]:

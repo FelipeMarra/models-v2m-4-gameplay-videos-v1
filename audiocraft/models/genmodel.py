@@ -111,6 +111,7 @@ class BaseGenModel(ABC):
             self,
             descriptions: tp.Sequence[tp.Optional[str]],
             prompt: tp.Optional[torch.Tensor],
+            videos: tp.Union[tp.Sequence[tp.Optional[str]],None]=None,
     ) -> tp.Tuple[tp.List[ConditioningAttributes], tp.Optional[torch.Tensor]]:
         """Prepare model inputs.
 
@@ -118,9 +119,21 @@ class BaseGenModel(ABC):
             descriptions (list of str): A list of strings used as text conditioning.
             prompt (torch.Tensor): A batch of waveforms used for continuation.
         """
-        attributes = [
-            ConditioningAttributes(text={'description': description})
-            for description in descriptions]
+        if videos != None:
+            attributes = [
+                ConditioningAttributes(
+                    text={'description': description},
+                    video={'video': video}
+                )
+                for description, video in zip(descriptions, videos)
+            ]
+        else:
+            attributes = [
+                ConditioningAttributes(
+                    text={'description': description}
+                )
+                for description in descriptions
+            ]
 
         if prompt is not None:
             if descriptions is not None:
@@ -148,7 +161,7 @@ class BaseGenModel(ABC):
             return self.generate_audio(tokens), tokens
         return self.generate_audio(tokens)
 
-    def generate(self, descriptions: tp.List[str], progress: bool = False, return_tokens: bool = False) \
+    def generate(self, descriptions: tp.List[str], videos: tp.List[str], progress: bool = False, return_tokens: bool = False) \
             -> tp.Union[torch.Tensor, tp.Tuple[torch.Tensor, torch.Tensor]]:
         """Generate samples conditioned on text.
 
@@ -156,7 +169,7 @@ class BaseGenModel(ABC):
             descriptions (list of str): A list of strings used as text conditioning.
             progress (bool, optional): Flag to display progress of the generation process. Defaults to False.
         """
-        attributes, prompt_tokens = self._prepare_tokens_and_attributes(descriptions, None)
+        attributes, prompt_tokens = self._prepare_tokens_and_attributes(descriptions, None, videos=videos)
         assert prompt_tokens is None
         tokens = self._generate_tokens(attributes, prompt_tokens, progress)
         if return_tokens:

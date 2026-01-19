@@ -1,0 +1,36 @@
+# @package __global__
+
+classifier_free_guidance:
+  training_dropout: 0.3
+  inference_coef: 3.0
+
+attribute_dropout: {}
+
+fuser:
+  cross_attention_pos_emb: false
+  cross_attention_pos_emb_scale: 1
+  sum: []
+  prepend: []
+  cross: [description, video]
+  input_interpolate: []
+
+conditioners:
+  description:
+    model: t5
+    t5:
+      name: t5-base
+      finetune: true
+      word_dropout: 0.3
+      normalize_text: false
+      seq_len: 512 
+      output_tkns_dim: 512 # To alter the number of tokens 
+  video:
+    model: video
+    video:
+      name: google/vivit-b-16x2-kinetics400
+      video_len: 32
+      finetune: true
+      num_hidden_layers: 12
+      num_attention_heads: 12
+      seq_len: 3137
+      output_tkns_dim: 512 # To alter the number of tokens

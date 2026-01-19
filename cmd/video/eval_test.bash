@@ -3,7 +3,7 @@
 export AUDIOCRAFT_TEAM=default
 export USER=vivit_felipe
 export HYDRA_FULL_ERROR=1
-export CUDA_VISIBLE_DEVICES=5
+export CUDA_VISIBLE_DEVICES=1
 
 # FAD
 export CONDA_ENV_DIR="$CONDA_PREFIX/envs"
@@ -11,20 +11,19 @@ export TF_PYTHON_EXE="$CONDA_ENV_DIR/fad/bin/python"
 export TF_LIBRARY_PATH="$CONDA_ENV_DIR/fad/lib/python3.10/site-packages/nvidia/cudnn/lib"
 
 # By default dataset.evaluate.disable_sampling=true
+
 dora -P audiocraft run \
     fsdp.use=false \
     autocast=true \
-    solver=musicgen/musicgen_base_32khz \
+    solver=musicgen/musicgen_video_32khz \
     model/lm/model_scale=medium \
-    continue_from=/app/xps/audiocraft_felipe/xps/5aa5e26a_medium_random_no_t5 \
-    conditioner=text2music \
-    conditioners.description.t5.name=t5-base \
-    conditioners.description.t5.finetune=true \
+    continue_from=//pretrained/facebook/musicgen-medium \
+    conditioner=video2music \
     dset=snes_mvdb \
-    dataset.num_workers=4 \
-    dataset.batch_size=32 \
-    +dataset.evaluate.batch_size=32 \
-    +metrics.fad.tf.batch_size=32 \
+    dataset.num_workers=1 \
+    dataset.batch_size=4 \
+    +dataset.evaluate.batch_size=4 \
+    +metrics.fad.tf.batch_size=4 \
     execute_only=evaluate \
     dataset.evaluate.disable_sampling=true \
     evaluate.metrics.fad=true \
@@ -43,3 +42,14 @@ dora -P audiocraft run \
     evaluate.metrics.gt_text_consistency=false \
     evaluate.metrics.tuned_text_consistency=true \
     evaluate.metrics.gt_tuned_text_consistency=false
+
+#TODO: KLD and FAD should not use repeated audios 
+# |_ current FAD error is exactly because of this:
+#       assert stems is None or num_samples == len(set(stems))
+#   stems are the mp3 names, so a set of them will be less than the number of samples, since many samples use the same mp3
+
+# Should probably alter things at data.audio_dataset.load_audio_meta
+#   |_ check if it is execute_only=evaluate and KLD or FAD
+#      |_ go line by line on the egs jsonl
+#          |_ use Path(m.meta.path).stem to check if previous line audio is the same as the current
+#          |_ skip until the last is different than the current one; update the last

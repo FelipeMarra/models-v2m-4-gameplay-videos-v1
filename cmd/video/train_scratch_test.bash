@@ -2,7 +2,7 @@
 
 export AUDIOCRAFT_TEAM=default
 export USER=vivit_felipe # Will create an audiocraft_felipe folder inside checkpoints
-export CUDA_VISIBLE_DEVICES=4
+export CUDA_VISIBLE_DEVICES=1
 
 dora -P audiocraft run -d \
     fsdp.use=false \

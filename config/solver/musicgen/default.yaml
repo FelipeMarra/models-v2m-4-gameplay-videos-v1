@@ -42,15 +42,15 @@ dataset:
   min_segment_ratio: 0.8  # lower values such as 0.5 result in generations with a lot of silence.
   return_info: true
   train:
-    num_samples: 1000000000 # need a randomly large number here for AudioDataset 1_000_000_000
-    # Setting both shuffle_dataset and disable_sampling to True will result in the traditional 
+    num_samples: 1000000 # need a randomly large number here for AudioDataset 1_000_000 -> too large will were out your RAM
+    # Setting both dataset.train.shuffle and disable_sampling to true will result in the traditional 
     # concept of epoch, that is, getting all the samples in the dataset in a random order. 
-    disable_sampling: false # follow dataloader sampling order.
+    disable_sampling: false # if true, follow dataloader sampling order.
   valid:
-    num_samples: 1000000000 # if greater than the dataset size, it will just get all samples
+    num_samples: 1000000 # if greater than the dataset size, it will just get all samples
     disable_sampling: true # just get the samples in the dataloader order with dataloader's shuffle=False
   evaluate:
-    num_samples: 1000000000
+    num_samples: 1000000
     disable_sampling: true
     single_audio_instance: false
   generate:

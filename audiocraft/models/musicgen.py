@@ -196,6 +196,7 @@ class MusicGen(BaseGenModel):
             descriptions: tp.Sequence[tp.Optional[str]],
             prompt: tp.Optional[torch.Tensor],
             melody_wavs: tp.Optional[MelodyList] = None,
+            videos: tp.Union[tp.Sequence[tp.Optional[str]],None]=None
     ) -> tp.Tuple[tp.List[ConditioningAttributes], tp.Optional[torch.Tensor]]:
         """Prepare model inputs.
 
@@ -205,9 +206,21 @@ class MusicGen(BaseGenModel):
             melody_wavs (torch.Tensor, optional): A batch of waveforms
                 used as melody conditioning. Defaults to None.
         """
-        attributes = [
-            ConditioningAttributes(text={'description': description})
-            for description in descriptions]
+        if videos != None:
+            attributes = [
+                ConditioningAttributes(
+                    text={'description': description},
+                    video={'video': video}
+                )
+                for description, video in zip(descriptions, videos)
+            ]
+        else:
+            attributes = [
+                ConditioningAttributes(
+                    text={'description': description}
+                )
+                for description in descriptions
+            ]
 
         if melody_wavs is None:
             for attr in attributes:

@@ -2,9 +2,9 @@ import os
 import json
 import matplotlib.pyplot as plt
 
-XP_PATH = "/app/xps/audiocraft_felipe/xps/4f2637cb_multi_desc_sum_new_split"
-HISTORY_PATH = os.path.join(XP_PATH, "history.json")
-SAVE_PATH = os.path.join(XP_PATH, "history")
+XP_PATH = "/home/es119256/dados/xps/audiocraft_vivit_felipe/xps/fake/"
+HISTORY_PATH = os.path.join(XP_PATH, "history_copy.json")
+SAVE_PATH = os.path.join(XP_PATH, "history_copy")
 METRICS = ['ce', 'ppl']
 
 def main():
@@ -37,7 +37,7 @@ def main():
         plt.plot(results[metric]['train'])
         plt.plot(results[metric]['valid'])
 
-        plt.xticks(range(0, 75, 2))
+        plt.xticks(range(0, 119, 4))
 
         plt.grid()
 
@@ -47,7 +47,13 @@ def main():
         plt.savefig(f"{SAVE_PATH}/{metric}.png")
         plt.clf()
 
-    os.rename(HISTORY_PATH, f"{SAVE_PATH}/history.json")
+    # os.rename(HISTORY_PATH, f"{SAVE_PATH}/history.json")
+
+    metric = 'ce'
+    indexes = range(len(results[metric]['valid']))
+    indexes = sorted(indexes, key=lambda x: results[metric]['valid'][x])
+    print(f"Best Valid Epoch: {indexes[0]+1}, with value {results[metric]['valid'][indexes[0]]}")
+    print(f"Worst Valid Epoch: {indexes[-1]+1}, with value {results[metric]['valid'][indexes[-1]]}")
 
 if __name__ == "__main__":
     main()

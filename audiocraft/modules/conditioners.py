@@ -26,6 +26,7 @@ from torch import nn
 import torch.nn.functional as F
 from torch.nn.utils.rnn import pad_sequence
 import torchvision
+from torchvision.transforms import v2
 from enum import Enum
 from .chroma import ChromaExtractor
 from .streaming import StreamingModule
@@ -363,12 +364,31 @@ class BaseConditioner(nn.Module):
         dim (int): Hidden dim of the model.
         output_dim (int): Output dim of the conditioner.
     """
-    def __init__(self, dim: int, output_dim: int):
+    def __init__(self, dim: int, output_dim: int, output_tkns_dim:int=-1, seq_len: int=-1):
         super().__init__()
         self.dim = dim
         self.output_dim = output_dim
+        self.output_tkns_dim = output_tkns_dim
+        self.seq_len = seq_len
+
         if self.output_dim > -1:  # omit projection when output_dim <= 0
-            self.output_proj = nn.Linear(dim, output_dim)
+            self.output_proj = nn.Linear(self.dim, self.output_dim)
+
+        if self.output_tkns_dim > -1 and self.seq_len > -1:  # omit projection when output_dim <= 0
+            self.output_tkns_proj = nn.Linear(self.seq_len, self.output_tkns_dim)
+
+    def apply_output_tkns_proj(self, x:torch.Tensor, name="") -> torch.Tensor:
+        if self.output_tkns_proj:
+            # B, Seq_len, output_dim
+            B, S, O = x.shape
+            # print(f"\n {name} apply_output_tkns_proj, x.shape: {x.shape} \n")
+
+            # Put Seq_len in the last dim, apply layer to change num of tokens and reshape back
+            x = x.permute(0, 2, 1) # B, S, O (batch, seq_len, out_dim) -> B, O, S
+            x = self.output_tkns_proj(x)
+            x = x.permute(0, 2, 1) # B, S, O -> B, O, S
+
+        return x
 
     def tokenize(self, *args, **kwargs) -> tp.Any:
         """Should be any part of the processing that will lead to a synchronization
@@ -460,10 +480,10 @@ class T5Conditioner(TextConditioner):
 
     def __init__(self, name: str, output_dim: int, finetune: bool, device: str,
                  autocast_dtype: tp.Optional[str] = 'float32', word_dropout: float = 0.,
-                 normalize_text: bool = False):
+                 normalize_text: bool = False, output_tkns_dim:int=-1, seq_len: int=-1):
         assert name in self.MODELS, f"Unrecognized t5 model name (should in {self.MODELS})"
 
-        super().__init__(self.MODELS_DIMS[name], output_dim)
+        super().__init__(self.MODELS_DIMS[name], output_dim, output_tkns_dim=output_tkns_dim, seq_len=seq_len)
         self.device = device
         self.name = name
         self.finetune = finetune
@@ -486,8 +506,8 @@ class T5Conditioner(TextConditioner):
         with warnings.catch_warnings():
             warnings.simplefilter("ignore")
             try:
-                self.t5_tokenizer = T5Tokenizer.from_pretrained(name)
-                t5 = T5EncoderModel.from_pretrained(name).train(mode=finetune)
+                self.t5_tokenizer:T5Tokenizer = T5Tokenizer.from_pretrained(name)
+                t5:T5EncoderModel = T5EncoderModel.from_pretrained(name).train(mode=finetune)
             finally:
                 logging.disable(previous_level)
 
@@ -529,9 +549,28 @@ class T5Conditioner(TextConditioner):
             embeds = self.t5(**inputs).last_hidden_state
 
         embeds = self.output_proj(embeds.to(self.output_proj.weight))
+        # print(f"\n T5 mask shape: {mask.shape} \n")
         embeds = (embeds * mask.unsqueeze(-1))
+        embeds = self.apply_output_tkns_proj(embeds, name=self.name)
 
         return embeds, mask
+
+class SNESViViTImageProcessor():
+    def __init__(self, normalize:bool) -> None:
+        self.normalize = normalize
+
+        self.compose = v2.Compose([
+            v2.RandomResizedCrop(size=(224, 224), antialias=True),
+            v2.RandomHorizontalFlip(p=0.5),
+        ])
+
+    def __call__(self, videos:torch.Tensor) -> torch.Tensor:
+        videos = self.compose(videos)
+
+        if self.normalize:
+            videos = videos / 255
+
+        return videos
 
 class VideoConditioner(BaseConditioner):
     ...
@@ -547,10 +586,12 @@ class ViViTConditioner(VideoConditioner):
     }
 
     def __init__(self, name: str, output_dim: int, finetune:bool, device:str, 
-                autocast_dtype: tp.Optional[str] = 'float32', video_len:int=32):
+                autocast_dtype: tp.Optional[str] = 'float32', video_len:int=32, 
+                num_hidden_layers:int=12, num_attention_heads:int=12, 
+                output_tkns_dim:int=-1, seq_len: int=-1):
         assert name in self.MODELS, f"Unrecognized ViViT model name (should in {self.MODELS})"
 
-        super().__init__(self.MODELS_DIMS[name], output_dim)
+        super().__init__(self.MODELS_DIMS[name], output_dim, output_tkns_dim=output_tkns_dim, seq_len=seq_len)
 
         self.device = device
         self.name = name
@@ -567,14 +608,21 @@ class ViViTConditioner(VideoConditioner):
             logger.info(f"ViViT will be evaluated with autocast as {autocast_dtype}")
             self.autocast = TorchAutocast(enabled=True, device_type=self.device, dtype=dtype)
 
-        self.image_processor = VivitImageProcessor.from_pretrained(name)
-        #print(f"VivitImageProcessor: {self.image_processor.to_dict()}")
-        #VivitImageProcessor: {'_processor_class': None, 'image_processor_type': 'VivitImageProcessor', 
-        #'do_resize': True, 'size': {'shortest_edge': 224}, 'do_center_crop': True, 
-        #'crop_size': {'height': 224, 'width': 224}, 'resample': 2, 'do_rescale': True, 
-        #'rescale_factor': 0.00784313725490196, 'offset': True, 'do_normalize': True, 
-        #'image_mean': [0.5, 0.5, 0.5], 'image_std': [0.5, 0.5, 0.5]}
-        vivit = VivitModel.from_pretrained(name).train(mode=finetune) # type: ignore
+        self.image_processor = SNESViViTImageProcessor(normalize=True)
+
+        vivit_config = VivitModel.config_class.from_pretrained(name)
+        # print(f"ViViT CONFIG INSIDE VIVIT CONDITIONER\n{vivit_config}")
+
+        vivit_config.update(
+            {
+                "num_hidden_layers": num_hidden_layers,
+                "num_attention_heads": num_attention_heads
+            }
+        )
+        # print(f"ViViT CONFIG INSIDE VIVIT CONDITIONER MODIFIED\n{vivit_config}")
+
+        vivit = VivitModel.from_pretrained(name, config=vivit_config).train(mode=finetune) # type: ignore
+        #vivit = VivitModel.from_pretrained(name).train(mode=finetune) # type: ignore
 
         if finetune:
             self.vivit = vivit
@@ -589,7 +637,7 @@ class ViViTConditioner(VideoConditioner):
             container (`av.container.input.InputContainer`): PyAV container.
             indices (`list[int]`): List of frame indices to decode.
         Returns:
-            result (np.ndarray): np array of decoded frames of shape (num_frames, height, width, 3).
+            result (torch.Tensor):tensor of decoded frames of shape (num_frames, 3, height, width).
         '''
         frames = []
         container.seek(0)
@@ -600,7 +648,9 @@ class ViViTConditioner(VideoConditioner):
                 break
             if i >= start_index and i in indices:
                 frames.append(frame)
-        return np.stack([x.to_ndarray(format="rgb24") for x in frames])
+        video = torch.stack([torch.from_numpy(x.to_ndarray(format="rgb24")) for x in frames])
+        video = video.permute(0, 3, 1, 2)
+        return video
 
     def write_video(self, file_name, frame_rate, video_tensor):
         """
@@ -608,11 +658,10 @@ class ViViTConditioner(VideoConditioner):
         """
         # Def not sufficient to bring the image back to the original pixel values
         # after the ImageProcessor stuff, but enough to get an ideia if it is working
-        video_tensor = (video_tensor.squeeze() * 255).clamp(0, 255).to(torch.uint8)
         video_tensor = video_tensor.permute(0, 2, 3, 1)
         torchvision.io.write_video(f'{file_name}.mp4', video_tensor, frame_rate)
 
-    def sample_frame_indices(self, clip_len, seg_len):
+    def sample_frame_indices_random_fr(self, video_path, clip_len, seg_len):
         '''
         Sample a given number of frame indices from the video.
         We set a window of a random size and position and sample frames linearly spaced.
@@ -626,7 +675,15 @@ class ViViTConditioner(VideoConditioner):
         Returns:
             indices (`list[int]`): List of sampled frame indices
         '''
-        frame_sample_rate = np.random.randint(2, 10) # rand between 2 and 9
+        max_fr = np.ceil(seg_len/clip_len) # amout of frames vary a bit
+        min_fr = 2
+
+        try:
+            frame_sample_rate = np.random.randint(min_fr, max_fr) # rand between 2 and 9 (for 300 frames)
+        except:
+            logger.error(f"Video {video_path} has len of only {seg_len} and should be removed from the dataset")
+            frame_sample_rate=1
+
         converted_len = int(clip_len * frame_sample_rate) # 32 * 2-9 -> 64-288
         end_idx = np.random.randint(converted_len, seg_len) # end at rand between 64-288 and 299
         # start from rand end - 64
@@ -638,6 +695,29 @@ class ViViTConditioner(VideoConditioner):
         window_duration = (end_idx-start_idx)/30
         return indices, window_duration
 
+    def sample_frame_indices(self, video_path, clip_len, frame_sample_rate, seg_len):
+        '''
+        Sample a given number of frame indices from the video.
+        Args:
+            clip_len (`int`): Total number of frames to sample.
+            frame_sample_rate (`int`): Sample every n-th frame.
+            seg_len (`int`): Maximum allowed index of sample's last frame.
+        Returns:
+            indices (`list[int]`): List of sampled frame indices
+        '''
+        try:
+            converted_len = int(clip_len * frame_sample_rate)
+            end_idx = np.random.randint(converted_len, seg_len) # rand between 64 and 300 (for videos with 300 frames)
+        except:
+            logger.error(f"Video {video_path} has len of only {seg_len} and should be removed from the dataset")
+            converted_len = clip_len
+            end_idx = np.random.randint(converted_len, seg_len) # rand between 32 and ??? (for videos with less than 64 frames, that should be remove from the dataset)
+
+        start_idx = end_idx - converted_len
+        indices = np.linspace(start_idx, end_idx, num=clip_len)
+        indices = np.clip(indices, start_idx, end_idx - 1).astype(np.int64)
+        return indices
+
     def tokenize(self, x: tp.List[tp.Optional[str]]) -> tp.Dict[str, torch.Tensor]:
         # video_len: video total seconds
         # if current sample doesn't have a certain attribute, replace with empty string
@@ -647,13 +727,17 @@ class ViViTConditioner(VideoConditioner):
             if v != "":
                 if isinstance(v, str):
                     container = av.open(v)
-                    indices, window_duration = self.sample_frame_indices(clip_len=32, seg_len=container.streams.video[0].frames)
+                    #indices, window_duration = self.sample_frame_indices(v, clip_len=32, seg_len=container.streams.video[0].frames)
+                    indices = self.sample_frame_indices(video_path=v, clip_len=32, frame_sample_rate=2, seg_len=container.streams.video[0].frames)
                     video = self.read_video_pyav(container=container, indices=indices)
-                    video = list(self.image_processor(list(video), return_tensors="pt").values())[0] # type: ignore
+                    video = self.image_processor(video)
+
+                    # Save video to test augs
                     # file_name = v.split('.')[0].split('/')[-1]
-                    # frame_rate = self.video_len/window_duration
+                    # frame_rate = 32 #self.video_len/(window_duration)
                     # self.write_video(file_name, frame_rate, video.squeeze())
-                    video = video.to(self.device)
+
+                    video = video.to(self.device).unsqueeze(0)
                 else:
                     video = v.to(self.device)
 
@@ -661,32 +745,36 @@ class ViViTConditioner(VideoConditioner):
                 videos['attention_mask'].append(1)
             else:
                 if self.training:
-                    video = torch.zeros(self.video_len, 3, 224, 224).to(self.device)
+                    video = torch.zeros(1, self.video_len, 3, 224, 224).to(self.device)
                 else:
-                    video = torch.zeros(videos["video"][0].shape[0], 3, 224, 224).to(self.device)
+                    video = torch.zeros(1, videos["video"][0].shape[1], 3, 224, 224).to(self.device)
 
                 videos["video"].append(video)
                 videos['attention_mask'].append(0)
+
         return videos
 
     def forward(self, inputs: tp.Dict[str, torch.Tensor]) -> ConditionType:
         mask = inputs['attention_mask']
-        video = inputs['video']
-        video = torch.cat(video, 0) # type: ignore
+        videos = inputs['video']
+        videos = torch.cat(videos, 0).float() # type: ignore
+        # print(f"videos: {videos.shape}")
 
         with torch.set_grad_enabled(self.finetune), self.autocast:
-            outputs = self.vivit(video)
-            embeds = outputs.pooler_output
+            outputs = self.vivit(videos)
+            embeds = outputs.last_hidden_state
 
         empty_idx = torch.LongTensor([i for i, xi in enumerate(mask) if xi == 0])
-        mask = torch.ones(video.shape[0], self.output_proj.weight.shape[0])
+        mask = torch.ones(embeds.shape[0], embeds.shape[1])
         mask[empty_idx, :] = 0
 
-        #embeds = embeds.reshape(mask.shape[0], mask.shape[1]) TODO: Conferir como isso rola la no GVMGen
         embeds = embeds.to(self.output_proj.weight)
         embeds = self.output_proj(embeds)
-        embeds = (embeds * mask.to(self.device))
-        return embeds.unsqueeze(1), mask.unsqueeze(1)
+        # print(f"\n ViViT mask shape: {mask.shape} \n")
+        embeds = (embeds * mask.unsqueeze(-1).to(self.device))
+        embeds = self.apply_output_tkns_proj(embeds, name=self.name)
+
+        return embeds, mask
 
 class WaveformConditioner(BaseConditioner):
     """Base class for all conditioners that take a waveform as input.

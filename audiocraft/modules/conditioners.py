@@ -364,12 +364,31 @@ class BaseConditioner(nn.Module):
         dim (int): Hidden dim of the model.
         output_dim (int): Output dim of the conditioner.
     """
-    def __init__(self, dim: int, output_dim: int):
+    def __init__(self, dim: int, output_dim: int, output_tkns_dim:int=-1, seq_len: int=-1):
         super().__init__()
         self.dim = dim
         self.output_dim = output_dim
+        self.output_tkns_dim = output_tkns_dim
+        self.seq_len = seq_len
+
         if self.output_dim > -1:  # omit projection when output_dim <= 0
-            self.output_proj = nn.Linear(dim, output_dim)
+            self.output_proj = nn.Linear(self.dim, self.output_dim)
+
+        if self.output_tkns_dim > -1 and self.seq_len > -1:  # omit projection when output_dim <= 0
+            self.output_tkns_proj = nn.Linear(self.seq_len, self.output_tkns_dim)
+
+    def apply_output_tkns_proj(self, x:torch.Tensor, name="") -> torch.Tensor:
+        if self.output_tkns_proj:
+            # B, Seq_len, output_dim
+            B, S, O = x.shape
+            # print(f"\n {name} apply_output_tkns_proj, x.shape: {x.shape} \n")
+
+            # Put Seq_len in the last dim, apply layer to change num of tokens and reshape back
+            x = x.permute(0, 2, 1) # B, S, O (batch, seq_len, out_dim) -> B, O, S
+            x = self.output_tkns_proj(x)
+            x = x.permute(0, 2, 1) # B, S, O -> B, O, S
+
+        return x
 
     def tokenize(self, *args, **kwargs) -> tp.Any:
         """Should be any part of the processing that will lead to a synchronization
@@ -461,10 +480,10 @@ class T5Conditioner(TextConditioner):
 
     def __init__(self, name: str, output_dim: int, finetune: bool, device: str,
                  autocast_dtype: tp.Optional[str] = 'float32', word_dropout: float = 0.,
-                 normalize_text: bool = False):
+                 normalize_text: bool = False, output_tkns_dim:int=-1, seq_len: int=-1):
         assert name in self.MODELS, f"Unrecognized t5 model name (should in {self.MODELS})"
 
-        super().__init__(self.MODELS_DIMS[name], output_dim)
+        super().__init__(self.MODELS_DIMS[name], output_dim, output_tkns_dim=output_tkns_dim, seq_len=seq_len)
         self.device = device
         self.name = name
         self.finetune = finetune
@@ -487,8 +506,8 @@ class T5Conditioner(TextConditioner):
         with warnings.catch_warnings():
             warnings.simplefilter("ignore")
             try:
-                self.t5_tokenizer = T5Tokenizer.from_pretrained(name)
-                t5 = T5EncoderModel.from_pretrained(name).train(mode=finetune)
+                self.t5_tokenizer:T5Tokenizer = T5Tokenizer.from_pretrained(name)
+                t5:T5EncoderModel = T5EncoderModel.from_pretrained(name).train(mode=finetune)
             finally:
                 logging.disable(previous_level)
 
@@ -530,7 +549,9 @@ class T5Conditioner(TextConditioner):
             embeds = self.t5(**inputs).last_hidden_state
 
         embeds = self.output_proj(embeds.to(self.output_proj.weight))
+        # print(f"\n T5 mask shape: {mask.shape} \n")
         embeds = (embeds * mask.unsqueeze(-1))
+        embeds = self.apply_output_tkns_proj(embeds, name=self.name)
 
         return embeds, mask
 
@@ -566,10 +587,11 @@ class ViViTConditioner(VideoConditioner):
 
     def __init__(self, name: str, output_dim: int, finetune:bool, device:str, 
                 autocast_dtype: tp.Optional[str] = 'float32', video_len:int=32, 
-                num_hidden_layers:int=12, num_attention_heads:int=12):
+                num_hidden_layers:int=12, num_attention_heads:int=12, 
+                output_tkns_dim:int=-1, seq_len: int=-1):
         assert name in self.MODELS, f"Unrecognized ViViT model name (should in {self.MODELS})"
 
-        super().__init__(self.MODELS_DIMS[name], output_dim)
+        super().__init__(self.MODELS_DIMS[name], output_dim, output_tkns_dim=output_tkns_dim, seq_len=seq_len)
 
         self.device = device
         self.name = name
@@ -597,7 +619,7 @@ class ViViTConditioner(VideoConditioner):
                 "num_attention_heads": num_attention_heads
             }
         )
-        print(f"ViViT CONFIG INSIDE VIVIT CONDITIONER MODIFIED\n{vivit_config}")
+        # print(f"ViViT CONFIG INSIDE VIVIT CONDITIONER MODIFIED\n{vivit_config}")
 
         vivit = VivitModel.from_pretrained(name, config=vivit_config).train(mode=finetune) # type: ignore
         #vivit = VivitModel.from_pretrained(name).train(mode=finetune) # type: ignore
@@ -736,7 +758,7 @@ class ViViTConditioner(VideoConditioner):
         mask = inputs['attention_mask']
         videos = inputs['video']
         videos = torch.cat(videos, 0).float() # type: ignore
-        #print(f"videos: {videos.shape}")
+        # print(f"videos: {videos.shape}")
 
         with torch.set_grad_enabled(self.finetune), self.autocast:
             outputs = self.vivit(videos)
@@ -748,7 +770,9 @@ class ViViTConditioner(VideoConditioner):
 
         embeds = embeds.to(self.output_proj.weight)
         embeds = self.output_proj(embeds)
+        # print(f"\n ViViT mask shape: {mask.shape} \n")
         embeds = (embeds * mask.unsqueeze(-1).to(self.device))
+        embeds = self.apply_output_tkns_proj(embeds, name=self.name)
 
         return embeds, mask
 

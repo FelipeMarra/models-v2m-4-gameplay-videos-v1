@@ -4,6 +4,7 @@
 # This source code is licensed under the license found in the
 # LICENSE file in the root directory of this source tree.
 
+from copy import deepcopy
 from abc import ABC, abstractmethod
 from contextlib import contextmanager
 from pathlib import Path
@@ -342,7 +343,8 @@ class StandardSolver(ABC, flashy.BaseSolver):
     def load_from_pretrained(self, name: str) -> dict:
         raise NotImplementedError("Solver does not provide a way to load pretrained models.")
 
-    def load_checkpoints(self, load_best: bool = False, ignore_state_keys: tp.List[str] = []) -> tp.Optional[dict]:
+    def load_checkpoints(self, load_best: bool = False, ignore_state_keys: tp.List[str] = [],
+                          ignore_state_conditioner: tp.List[str] = []) -> tp.Optional[dict]:
         """Load last checkpoint or the one specified in continue_from.
 
         Args:
@@ -423,14 +425,26 @@ class StandardSolver(ABC, flashy.BaseSolver):
 
         if state is not None:
             #print('state is not None')
+            has_best_state = 'best_state' in state or 'fsdp_best_state' in state
+            assert has_best_state, ("Trying to load best state but neither 'best_state'",
+                                    " or 'fsdp_best_state' found in checkpoints.")
+
             if load_best:
-                self.logger.info("Ignoring keys when loading best %r", ignore_state_keys)
+                self.logger.info(f"Ignoring keys when loading best {ignore_state_keys} | And conditioner {ignore_state_conditioner}")
+
+                best_state_model_keys = set(state['best_state']['model'].keys())
+                for key in best_state_model_keys:
+                    #print(f"------> state substates: {key}")
+                    for ignore_conditioner in ignore_state_conditioner:
+                        conditioner_start = f"condition_provider.conditioners.{ignore_conditioner}"
+                        if str(key).startswith(conditioner_start):
+                            #print(f"------> poping key: {key}")
+                            state['best_state']['model'].pop(key)
+
                 for key in set(ignore_state_keys):
                     if key in state:
                         state.pop(key)
-                has_best_state = 'best_state' in state or 'fsdp_best_state' in state
-                assert has_best_state, ("Trying to load best state but neither 'best_state'",
-                                        " or 'fsdp_best_state' found in checkpoints.")
+
             self.load_state_dict(state)
 
         # for FSDP, let's make extra sure nothing bad happened with out of sync
@@ -479,7 +493,7 @@ class StandardSolver(ABC, flashy.BaseSolver):
         return state
 
     def restore(self, load_best: bool = False, replay_metrics: bool = False,
-                ignore_state_keys: tp.List[str] = []) -> bool:
+                ignore_state_keys: tp.List[str] = [], ignore_state_conditioner: tp.List[str] = []) -> bool:
         """Restore the status of a solver for a given xp.
 
         Args:
@@ -491,7 +505,7 @@ class StandardSolver(ABC, flashy.BaseSolver):
         #print('@@@@@ solves.base.StandartSolver.restore')
         #print(f'ignore_state_keys: {ignore_state_keys}') # EMPTY on running metrics
         #print(f'load_best: {load_best}')
-        restored_checkpoints = self.load_checkpoints(load_best, ignore_state_keys)
+        restored_checkpoints = self.load_checkpoints(load_best, ignore_state_keys, ignore_state_conditioner)
 
         self.logger.info("Model hash: %s", model_hash(self.model))
 
@@ -544,7 +558,10 @@ class StandardSolver(ABC, flashy.BaseSolver):
     def run(self):
         """Training loop."""
         assert len(self.state_dict()) > 0
-        self.restore(replay_metrics=True)  # load checkpoint and replay history
+        if self.cfg.get('ignore_state_conditioner'):
+            self.restore(replay_metrics=True, ignore_state_conditioner=self.cfg.ignore_state_conditioner)  # load checkpoint and replay history
+        else:
+            self.restore(replay_metrics=True)  # load checkpoint and replay history
         self.log_hyperparams(dict_from_config(self.cfg))
         for epoch in range(self.epoch, self.cfg.optim.epochs + 1):
             if self.should_stop_training():

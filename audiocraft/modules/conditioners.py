@@ -9,51 +9,34 @@ from copy import deepcopy
 from dataclasses import dataclass, field
 from itertools import chain
 import logging
-import math
-from pathlib import Path
 import random
 import re
 import typing as tp
 import warnings
 import einops
-import flashy
 from num2words import num2words
 import spacy
-from transformers import RobertaTokenizer, T5EncoderModel, T5Tokenizer  # type: ignore
-from transformers import VivitImageProcessor, VivitModel
+from transformers import T5EncoderModel, T5Tokenizer  # type: ignore
+from transformers import VivitModel
 import torch
 from torch import nn
 import torch.nn.functional as F
 from torch.nn.utils.rnn import pad_sequence
 import torchvision
 from torchvision.transforms import v2
-from enum import Enum
-from .chroma import ChromaExtractor
 from .streaming import StreamingModule
-from .transformer import create_sin_embedding, StreamingTransformer
-from ..data.audio import audio_read
+from .transformer import create_sin_embedding
 from ..data.audio_dataset import SegmentInfo
 from ..data.audio_utils import convert_audio
-from ..environment import AudioCraftEnvironment
-from ..quantization import ResidualVectorQuantizer
 from ..utils.autocast import TorchAutocast
-from ..utils.cache import EmbeddingCache
-from ..utils.utils import collate, hash_trick, length_to_mask, load_clap_state_dict, warn_once
+from ..quantization import ResidualVectorQuantizer
+from ..utils.utils import collate, hash_trick, length_to_mask
 import av
 import numpy as np
 
 logger = logging.getLogger(__name__)
 TextCondition = tp.Optional[str]  # a text condition can be a string or None (if doesn't exist)
 ConditionType = tp.Tuple[torch.Tensor, torch.Tensor]  # condition, mask
-
-
-class JascoCondConst(Enum):
-    DRM = 'self_wav'
-    CRD = 'chords'
-    MLD = 'melody'
-    SYM = {'chords', 'melody'}
-    LAT = {'self_wav'}
-    ALL = ['chords', 'self_wav', 'melody']  # order matters
 
 
 class WavCondition(tp.NamedTuple):
@@ -202,35 +185,14 @@ def nullify_joint_embed(embed: JointEmbedCondition) -> JointEmbedCondition:
     """
     null_wav, _ = nullify_condition((embed.wav, torch.zeros_like(embed.wav)), dim=embed.wav.dim() - 1)
     return JointEmbedCondition(
-        wav=null_wav, text=[None] * len(embed.text),
+        wav=null_wav, 
+        text=[None] * len(embed.text),
+        video=[None] * len(embed.video),
         length=torch.LongTensor([0]).to(embed.wav.device),
         sample_rate=embed.sample_rate,
         path=[None] * embed.wav.shape[0],
         seek_time=[0] * embed.wav.shape[0],
     )
-
-
-def nullify_chords(sym_cond: SymbolicCondition, null_chord_idx: int = 194) -> SymbolicCondition:
-    """Nullify the symbolic condition by setting all frame chords to a specified null chord index.
-    Args:
-        sym_cond (SymbolicCondition): The symbolic condition containing frame chords to be nullified.
-        null_chord_idx (int, optional): The index to use for nullifying the chords. Defaults to 194 (Chordino).
-    Returns:
-        SymbolicCondition: A new symbolic condition with all frame chords set to the null chord index.
-    """
-    return SymbolicCondition(frame_chords=torch.ones_like(sym_cond.frame_chords) * null_chord_idx)  # type: ignore
-
-
-def nullify_melody(sym_cond: SymbolicCondition) -> SymbolicCondition:
-    """Nullify the symbolic condition by replacing the melody matrix with zeros matrix.
-    Args:
-        sym_cond (SymbolicCondition): The symbolic condition containing frame chords to be nullified.
-        null_chord_idx (int, optional): The index to use for nullifying the chords. Defaults to 194 (Chordino).
-    Returns:
-        SymbolicCondition: A new symbolic condition with all frame chords set to the null chord index.
-    """
-    return SymbolicCondition(melody=torch.zeros_like(sym_cond.melody))  # type: ignore
-
 
 def _drop_description_condition(conditions: tp.List[ConditioningAttributes]) -> tp.List[ConditioningAttributes]:
     """Drop the text condition but keep the wav conditon on a list of ConditioningAttributes.
@@ -246,7 +208,6 @@ def _drop_description_condition(conditions: tp.List[ConditioningAttributes]) -> 
         assert 'self_wav' in condition.wav.keys()
     return AttributeDropout(p={'text': {'description': 1.0},
                                'wav': {'self_wav': 0.0}})(conditions)
-
 
 class Tokenizer:
     """Base tokenizer implementation
@@ -323,37 +284,6 @@ class WhiteSpaceTokenizer(Tokenizer):
             return padded_output, mask, texts  # type: ignore
         return padded_output, mask
 
-
-class NoopTokenizer(Tokenizer):
-    """This tokenizer should be used for global conditioners such as: artist, genre, key, etc.
-    The difference between this and WhiteSpaceTokenizer is that NoopTokenizer does not split
-    strings, so "Jeff Buckley" will get it's own index. Whereas WhiteSpaceTokenizer will
-    split it to ["Jeff", "Buckley"] and return an index per word.
-
-    For example:
-    ["Queen", "ABBA", "Jeff Buckley"] => [43, 55, 101]
-    ["Metal", "Rock", "Classical"] => [0, 223, 51]
-    """
-    def __init__(self, n_bins: int, pad_idx: int = 0):
-        self.n_bins = n_bins
-        self.pad_idx = pad_idx
-
-    def __call__(self, texts: tp.List[tp.Optional[str]]) -> tp.Tuple[torch.Tensor, torch.Tensor]:
-        output, lengths = [], []
-        for text in texts:
-            # if current sample doesn't have a certain attribute, replace with pad token
-            if text is None:
-                output.append(self.pad_idx)
-                lengths.append(0)
-            else:
-                output.append(hash_trick(text, self.n_bins))
-                lengths.append(1)
-
-        tokens = torch.LongTensor(output).unsqueeze(1)
-        mask = length_to_mask(torch.IntTensor(lengths)).int()
-        return tokens, mask
-
-
 class BaseConditioner(nn.Module):
     """Base model for all conditioner modules.
     We allow the output dim to be different than the hidden dim for two reasons:
@@ -410,44 +340,68 @@ class BaseConditioner(nn.Module):
         """
         raise NotImplementedError()
 
+class JointEmbeddingConditioner(BaseConditioner):
+    """Joint embedding conditioning supporting both audio or text conditioning.
+
+    Args:
+        dim (int): Dimension.
+        output_dim (int): Output dimension.
+        device (str): Device.
+        attribute (str): Attribute used by the conditioner.
+        autocast_dtype (str): Autocast for the conditioner.
+        quantize (bool): Whether to quantize the CLAP embedding.
+        n_q (int): Number of residual quantizers (used if quantize is true).
+        bins (int): Quantizers' codebooks size (used if quantize is true).
+        kwargs: Additional parameters for residual vector quantizer.
+    """
+    def __init__(self, dim: int, output_dim: int, device: str, attribute: str,
+                 autocast_dtype: tp.Optional[str] = 'float32', quantize: bool = True,
+                 n_q: int = 12, bins: int = 1024, **kwargs):
+        super().__init__(dim=dim, output_dim=output_dim)
+        self.device = device
+        self.attribute = attribute
+        if autocast_dtype is None or device == 'cpu':
+            self.autocast = TorchAutocast(enabled=False)
+            logger.warning("JointEmbeddingConditioner has no autocast, this might lead to NaN.")
+        else:
+            dtype = getattr(torch, autocast_dtype)
+            assert isinstance(dtype, torch.dtype)
+            logger.info(f"JointEmbeddingConditioner will be evaluated with autocast as {autocast_dtype}.")
+            self.autocast = TorchAutocast(enabled=True, device_type=self.device, dtype=dtype)
+        # residual vector quantizer to discretize the conditioned embedding
+        self.quantizer: tp.Optional[ResidualVectorQuantizer] = None
+        if quantize:
+            self.quantizer = ResidualVectorQuantizer(dim, n_q=n_q, bins=bins, **kwargs)
+
+    def _get_embed(self, x: JointEmbedCondition) -> tp.Tuple[torch.Tensor, torch.Tensor]:
+        """Get joint embedding in latent space from the inputs.
+
+        Returns:
+            tuple[torch.Tensor, torch.Tensor]: Tensor for the latent embedding
+                and corresponding empty indexes.
+        """
+        raise NotImplementedError()
+
+    def forward(self, x: JointEmbedCondition) -> ConditionType:
+        with self.autocast:
+            embed, empty_idx = self._get_embed(x)
+            if self.quantizer is not None:
+                embed = embed.view(-1, self.dim, 1)
+                q_res = self.quantizer(embed, frame_rate=1)
+                out_embed = q_res.x.view(-1, self.dim)
+            else:
+                out_embed = embed
+            out_embed = self.output_proj(out_embed).view(-1, 1, self.output_dim)
+            mask = torch.ones(*out_embed.shape[:2], device=out_embed.device)
+            mask[empty_idx, :] = 0  # zero-out index where the input is non-existant
+            out_embed = (out_embed * mask.unsqueeze(-1))
+            return out_embed, mask
+
+    def tokenize(self, x: JointEmbedCondition) -> JointEmbedCondition:
+        return x
 
 class TextConditioner(BaseConditioner):
     ...
-
-
-class LUTConditioner(TextConditioner):
-    """Lookup table TextConditioner.
-
-    Args:
-        n_bins (int): Number of bins.
-        dim (int): Hidden dim of the model (text-encoder/LUT).
-        output_dim (int): Output dim of the conditioner.
-        tokenizer (str): Name of the tokenizer.
-        pad_idx (int, optional): Index for padding token. Defaults to 0.
-    """
-    def __init__(self, n_bins: int, dim: int, output_dim: int, tokenizer: str, pad_idx: int = 0):
-        super().__init__(dim, output_dim)
-        self.embed = nn.Embedding(n_bins, dim)
-        self.tokenizer: Tokenizer
-        if tokenizer == 'whitespace':
-            self.tokenizer = WhiteSpaceTokenizer(n_bins, pad_idx=pad_idx)
-        elif tokenizer == 'noop':
-            self.tokenizer = NoopTokenizer(n_bins, pad_idx=pad_idx)
-        else:
-            raise ValueError(f"unrecognized tokenizer `{tokenizer}`.")
-
-    def tokenize(self, x: tp.List[tp.Optional[str]]) -> tp.Tuple[torch.Tensor, torch.Tensor]:
-        device = self.embed.weight.device
-        tokens, mask = self.tokenizer(x)
-        tokens, mask = tokens.to(device), mask.to(device)
-        return tokens, mask
-
-    def forward(self, inputs: tp.Tuple[torch.Tensor, torch.Tensor]) -> ConditionType:
-        tokens, mask = inputs
-        embeds = self.embed(tokens)
-        embeds = self.output_proj(embeds)
-        embeds = (embeds * mask.unsqueeze(-1))
-        return embeds, mask
 
 
 class T5Conditioner(TextConditioner):
@@ -507,7 +461,7 @@ class T5Conditioner(TextConditioner):
             warnings.simplefilter("ignore")
             try:
                 self.t5_tokenizer:T5Tokenizer = T5Tokenizer.from_pretrained(name)
-                t5:T5EncoderModel = T5EncoderModel.from_pretrained(name).train(mode=finetune)
+                t5:T5EncoderModel = T5EncoderModel.from_pretrained(name).train(mode=finetune) # type: ignore
             finally:
                 logging.disable(previous_level)
 
@@ -527,7 +481,7 @@ class T5Conditioner(TextConditioner):
         entries: tp.List[str] = [xi if xi is not None else "" for xi in x]
 
         if self.normalize_text:
-            _, _, entries = self.text_normalizer(entries, return_text=True)
+            _, _, entries = self.text_normalizer(entries, return_text=True) # type: ignore
 
         if self.word_dropout > 0. and self.training:
             new_entries = []
@@ -538,10 +492,17 @@ class T5Conditioner(TextConditioner):
 
         empty_idx = torch.LongTensor([i for i, xi in enumerate(entries) if xi == ""])
 
-        inputs = self.t5_tokenizer(entries, return_tensors='pt', padding=True).to(self.device)
+        inputs = self.t5_tokenizer(
+            entries, 
+            return_tensors='pt', 
+            padding='max_length', 
+            truncation=True, 
+            max_length=self.seq_len
+        ).to(self.device)
+
         mask = inputs['attention_mask']
-        mask[empty_idx, :] = 0  # zero-out index where the input is non-existant
-        return inputs
+        mask[empty_idx, :] = 0  # type: ignore # zero-out index where the input is non-existant
+        return inputs # type: ignore
 
     def forward(self, inputs: tp.Dict[str, torch.Tensor]) -> ConditionType:
         mask = inputs['attention_mask']
@@ -718,11 +679,11 @@ class ViViTConditioner(VideoConditioner):
         indices = np.clip(indices, start_idx, end_idx - 1).astype(np.int64)
         return indices
 
-    def tokenize(self, x: tp.List[tp.Optional[str]]) -> tp.Dict[str, torch.Tensor]:
+    def tokenize(self, x: tp.List[tp.Optional[str]]) -> tp.Dict[str, tp.List[tp.Any]]:
         # video_len: video total seconds
         # if current sample doesn't have a certain attribute, replace with empty string
         entries: tp.List[str] = [xi if xi is not None else "" for xi in x]
-        videos = {"video": [], "attention_mask": []}
+        videos:tp.Dict[str, tp.Any] = {"video": [], "attention_mask": []}
         for v in entries:
             if v != "":
                 if isinstance(v, str):
@@ -744,10 +705,7 @@ class ViViTConditioner(VideoConditioner):
                 videos["video"].append(video)
                 videos['attention_mask'].append(1)
             else:
-                if self.training:
-                    video = torch.zeros(1, self.video_len, 3, 224, 224).to(self.device)
-                else:
-                    video = torch.zeros(1, videos["video"][0].shape[1], 3, 224, 224).to(self.device)
+                video = torch.zeros(1, self.video_len, 3, 224, 224).to(self.device)
 
                 videos["video"].append(video)
                 videos['attention_mask'].append(0)
@@ -827,198 +785,6 @@ class WaveformConditioner(BaseConditioner):
             mask = torch.ones_like(embeds[..., 0])
         embeds = (embeds * mask.unsqueeze(-1))
         return embeds, mask
-
-
-class ChromaStemConditioner(WaveformConditioner):
-    """Chroma conditioner based on stems.
-    The ChromaStemConditioner uses DEMUCS to first filter out drums and bass, as
-    the drums and bass often dominate the chroma leading to the chroma features
-    not containing information about the melody.
-
-    Args:
-        output_dim (int): Output dimension for the conditioner.
-        sample_rate (int): Sample rate for the chroma extractor.
-        n_chroma (int): Number of chroma bins for the chroma extractor.
-        radix2_exp (int): Size of stft window for the chroma extractor (power of 2, e.g. 12 -> 2^12).
-        duration (int): duration used during training. This is later used for correct padding
-            in case we are using chroma as prefix.
-        match_len_on_eval (bool, optional): if True then all chromas are padded to the training
-            duration. Defaults to False.
-        eval_wavs (str, optional): path to a dataset manifest with waveform, this waveforms are used as
-            conditions during eval (for cases where we don't want to leak test conditions like MusicCaps).
-            Defaults to None.
-        n_eval_wavs (int, optional): limits the number of waveforms used for conditioning. Defaults to 0.
-        device (tp.Union[torch.device, str], optional): Device for the conditioner.
-        **kwargs: Additional parameters for the chroma extractor.
-    """
-    def __init__(self, output_dim: int, sample_rate: int, n_chroma: int, radix2_exp: int,
-                 duration: float, match_len_on_eval: bool = True, eval_wavs: tp.Optional[str] = None,
-                 n_eval_wavs: int = 0, cache_path: tp.Optional[tp.Union[str, Path]] = None,
-                 device: tp.Union[torch.device, str] = 'cpu', **kwargs):
-        from demucs import pretrained
-        super().__init__(dim=n_chroma, output_dim=output_dim, device=device)
-        self.autocast = TorchAutocast(enabled=device != 'cpu', device_type=self.device, dtype=torch.float32)
-        self.sample_rate = sample_rate
-        self.match_len_on_eval = match_len_on_eval
-        if match_len_on_eval:
-            self._use_masking = False
-        self.duration = duration
-        self.__dict__['demucs'] = pretrained.get_model('htdemucs').to(device)
-        stem_sources: list = self.demucs.sources  # type: ignore
-        self.stem_indices = torch.LongTensor([stem_sources.index('vocals'), stem_sources.index('other')]).to(device)
-        self.chroma = ChromaExtractor(sample_rate=sample_rate, n_chroma=n_chroma,
-                                      radix2_exp=radix2_exp, **kwargs).to(device)
-        self.chroma_len = self._get_chroma_len()
-        self.eval_wavs: tp.Optional[torch.Tensor] = self._load_eval_wavs(eval_wavs, n_eval_wavs)
-        self.cache = None
-        if cache_path is not None:
-            self.cache = EmbeddingCache(Path(cache_path) / 'wav', self.device,
-                                        compute_embed_fn=self._get_full_chroma_for_cache,
-                                        extract_embed_fn=self._extract_chroma_chunk)
-
-    def _downsampling_factor(self) -> int:
-        return self.chroma.winhop
-
-    def _load_eval_wavs(self, path: tp.Optional[str], num_samples: int) -> tp.Optional[torch.Tensor]:
-        """Load pre-defined waveforms from a json.
-        These waveforms will be used for chroma extraction during evaluation.
-        This is done to make the evaluation on MusicCaps fair (we shouldn't see the chromas of MusicCaps).
-        """
-        if path is None:
-            return None
-
-        logger.info(f"Loading evaluation wavs from {path}")
-        from audiocraft.data.audio_dataset import AudioDataset
-        dataset: AudioDataset = AudioDataset.from_meta(
-            path, segment_duration=self.duration, min_audio_duration=self.duration,
-            sample_rate=self.sample_rate, channels=1)
-
-        if len(dataset) > 0:
-            eval_wavs = dataset.collater([dataset[i] for i in range(num_samples)]).to(self.device)
-            logger.info(f"Using {len(eval_wavs)} evaluation wavs for chroma-stem conditioner")
-            return eval_wavs
-        else:
-            raise ValueError("Could not find evaluation wavs, check lengths of wavs")
-
-    def reset_eval_wavs(self, eval_wavs: tp.Optional[torch.Tensor]) -> None:
-        self.eval_wavs = eval_wavs
-
-    def has_eval_wavs(self) -> bool:
-        return self.eval_wavs is not None
-
-    def _sample_eval_wavs(self, num_samples: int) -> torch.Tensor:
-        """Sample wavs from a predefined list."""
-        assert self.eval_wavs is not None, "Cannot sample eval wavs as no eval wavs provided."
-        total_eval_wavs = len(self.eval_wavs)
-        out = self.eval_wavs
-        if num_samples > total_eval_wavs:
-            out = self.eval_wavs.repeat(num_samples // total_eval_wavs + 1, 1, 1)
-        return out[torch.randperm(len(out))][:num_samples]
-
-    def _get_chroma_len(self) -> int:
-        """Get length of chroma during training."""
-        dummy_wav = torch.zeros((1, int(self.sample_rate * self.duration)), device=self.device)
-        dummy_chr = self.chroma(dummy_wav)
-        return dummy_chr.shape[1]
-
-    @torch.no_grad()
-    def _get_stemmed_wav(self, wav: torch.Tensor, sample_rate: int) -> torch.Tensor:
-        """Get parts of the wav that holds the melody, extracting the main stems from the wav."""
-        from demucs.apply import apply_model
-        from demucs.audio import convert_audio
-        with self.autocast:
-            wav = convert_audio(
-                wav, sample_rate, self.demucs.samplerate, self.demucs.audio_channels)  # type: ignore
-            stems = apply_model(self.demucs, wav, device=self.device)  # type: ignore
-            stems = stems[:, self.stem_indices]  # extract relevant stems for melody conditioning
-            mix_wav = stems.sum(1)  # merge extracted stems to single waveform
-            mix_wav = convert_audio(mix_wav, self.demucs.samplerate, self.sample_rate, 1)  # type: ignore
-            return mix_wav
-
-    @torch.no_grad()
-    def _extract_chroma(self, wav: torch.Tensor) -> torch.Tensor:
-        """Extract chroma features from the waveform."""
-        with self.autocast:
-            return self.chroma(wav)
-
-    @torch.no_grad()
-    def _compute_wav_embedding(self, wav: torch.Tensor, sample_rate: int) -> torch.Tensor:
-        """Compute wav embedding, applying stem and chroma extraction."""
-        # avoid 0-size tensors when we are working with null conds
-        if wav.shape[-1] == 1:
-            return self._extract_chroma(wav)
-        stems = self._get_stemmed_wav(wav, sample_rate)
-        chroma = self._extract_chroma(stems)
-        return chroma
-
-    @torch.no_grad()
-    def _get_full_chroma_for_cache(self, path: tp.Union[str, Path], x: WavCondition, idx: int) -> torch.Tensor:
-        """Extract chroma from the whole audio waveform at the given path."""
-        wav, sr = audio_read(path)
-        wav = wav[None].to(self.device)
-        wav = convert_audio(wav, sr, self.sample_rate, to_channels=1)
-        chroma = self._compute_wav_embedding(wav, self.sample_rate)[0]
-        return chroma
-
-    def _extract_chroma_chunk(self, full_chroma: torch.Tensor, x: WavCondition, idx: int) -> torch.Tensor:
-        """Extract a chunk of chroma from the full chroma derived from the full waveform."""
-        wav_length = x.wav.shape[-1]
-        seek_time = x.seek_time[idx]
-        assert seek_time is not None, (
-            "WavCondition seek_time is required "
-            "when extracting chroma chunks from pre-computed chroma.")
-        full_chroma = full_chroma.float()
-        frame_rate = self.sample_rate / self._downsampling_factor()
-        target_length = int(frame_rate * wav_length / self.sample_rate)
-        index = int(frame_rate * seek_time)
-        out = full_chroma[index: index + target_length]
-        out = F.pad(out[None], (0, 0, 0, target_length - out.shape[0]))[0]
-        return out.to(self.device)
-
-    @torch.no_grad()
-    def _get_wav_embedding(self, x: WavCondition) -> torch.Tensor:
-        """Get the wav embedding from the WavCondition.
-        The conditioner will either extract the embedding on-the-fly computing it from the condition wav directly
-        or will rely on the embedding cache to load the pre-computed embedding if relevant.
-        """
-        sampled_wav: tp.Optional[torch.Tensor] = None
-        if not self.training and self.eval_wavs is not None:
-            warn_once(logger, "Using precomputed evaluation wavs!")
-            sampled_wav = self._sample_eval_wavs(len(x.wav))
-
-        no_undefined_paths = all(p is not None for p in x.path)
-        no_nullified_cond = x.wav.shape[-1] > 1
-        if sampled_wav is not None:
-            chroma = self._compute_wav_embedding(sampled_wav, self.sample_rate)
-        elif self.cache is not None and no_undefined_paths and no_nullified_cond:
-            paths = [Path(p) for p in x.path if p is not None]
-            chroma = self.cache.get_embed_from_cache(paths, x)
-        else:
-            assert all(sr == x.sample_rate[0] for sr in x.sample_rate), "All sample rates in batch should be equal."
-            chroma = self._compute_wav_embedding(x.wav, x.sample_rate[0])
-
-        if self.match_len_on_eval:
-            B, T, C = chroma.shape
-            if T > self.chroma_len:
-                chroma = chroma[:, :self.chroma_len]
-                logger.debug(f"Chroma was truncated to match length! ({T} -> {chroma.shape[1]})")
-            elif T < self.chroma_len:
-                n_repeat = int(math.ceil(self.chroma_len / T))
-                chroma = chroma.repeat(1, n_repeat, 1)
-                chroma = chroma[:, :self.chroma_len]
-                logger.debug(f"Chroma was repeated to match length! ({T} -> {chroma.shape[1]})")
-
-        return chroma
-
-    def tokenize(self, x: WavCondition) -> WavCondition:
-        """Apply WavConditioner tokenization and populate cache if needed."""
-        x = super().tokenize(x)
-        no_undefined_paths = all(p is not None for p in x.path)
-        if self.cache is not None and no_undefined_paths:
-            paths = [Path(p) for p in x.path if p is not None]
-            self.cache.populate_embed_cache(paths, x)
-        return x
-
 
 class FeatureExtractor(WaveformConditioner):
     """
@@ -1110,7 +876,7 @@ class FeatureExtractor(WaveformConditioner):
             else:
                 embeds = self.embed(embeds)
 
-            return embeds  # [B, T, dim]
+            return embeds  # type: ignore # [B, T, dim]
 
     def _downsampling_factor(self):
         if self.model_name == 'encodec':
@@ -1129,472 +895,6 @@ class FeatureExtractor(WaveformConditioner):
         mask[:, :, start:start+mask_length] = 0
         return mask
 
-
-class StyleConditioner(FeatureExtractor):
-    """Conditioner from the paper AUDIO CONDITIONING FOR MUSIC GENERATION VIA
-    DISCRETE BOTTLENECK FEATURES.
-    Given an audio input, it is passed through a Feature Extractor and a
-    transformer encoder. Then it is quantized through RVQ.
-
-    Args:
-        transformer_scale (str): size of the transformer. See in the __init__ to have more infos.
-        ds_factor (int): the downsampling factor applied to the representation after quantization.
-        encodec_n_q (int): if encodec is used as a feature extractor it sets the number of
-            quantization streams used in it.
-        n_q_out (int): the number of quantization streams used for the RVQ. If increased, there
-            is more information passing as a conditioning.
-        eval_q (int): the number of quantization streams used for the RVQ at evaluation time.
-        q_dropout (bool): if True, at training time, a random number of stream is sampled
-            at each step in the interval [1, n_q_out].
-        bins (int): the codebook size used for each quantization stream.
-        varying_lengths (List[float]): list of the min and max duration in seconds for the
-            randomly subsampled excerpt at training time. For each step a length is sampled
-            in this interval.
-        batch_norm (bool): use of batch normalization after the transformer. Stabilizes the
-            training.
-        rvq_threshold_ema_dead_code (float): threshold for dropping dead codes in the
-            RVQ.
-    """
-    def __init__(self, transformer_scale: str = 'default', ds_factor: int = 15, encodec_n_q: int = 4,
-                 n_q_out: int = 6, eval_q: int = 3, q_dropout: bool = True, bins: int = 1024,
-                 varying_lengths: tp.List[float] = [1.5, 4.5],
-                 batch_norm: bool = True, rvq_threshold_ema_dead_code: float = 0.1,
-                 **kwargs):
-        tr_args: tp.Dict[str, tp.Any]
-        if transformer_scale == 'xsmall':
-            tr_args = {'d_model': 256, 'num_heads': 8, 'num_layers': 4}
-        elif transformer_scale == 'large':
-            tr_args = {'d_model': 1024, 'num_heads': 16, 'num_layers': 24}
-        elif transformer_scale == 'default':
-            tr_args = {'d_model': 512, 'num_heads': 8, 'num_layers': 8}
-        elif transformer_scale == 'none':
-            tr_args = {'d_model': 512}
-        tr_args.update({
-            'memory_efficient': True, 'activation': 'gelu',
-            'norm_first': True, 'causal': False, 'layer_scale': None,
-            'bias_ff': False, 'bias_attn': False,
-        })
-        dim = tr_args['d_model']
-        super().__init__(dim=dim, encodec_n_q=encodec_n_q, **kwargs)
-
-        self.ds_factor = ds_factor
-        if transformer_scale == 'none':
-            self.transformer = None
-        else:
-            self.transformer = StreamingTransformer(dim_feedforward=int(4 * dim), **tr_args)
-        self.n_q_out = n_q_out
-        self.eval_q = eval_q
-        self.rvq = None
-        if n_q_out > 0:
-            self.rvq = ResidualVectorQuantizer(dim, n_q=n_q_out, q_dropout=q_dropout, bins=bins,
-                                               threshold_ema_dead_code=rvq_threshold_ema_dead_code)
-        self.autocast = TorchAutocast(enabled=self.device != 'cpu', device_type=self.device, dtype=torch.float32)
-        self.varying_lengths = varying_lengths
-        self.batch_norm = None
-        if batch_norm:
-            self.batch_norm = nn.BatchNorm1d(dim, affine=False)
-        self.mask = None
-
-    def _get_wav_embedding(self, wav: WavCondition) -> torch.Tensor:
-        with self.autocast:
-            # Sample the length of the excerpts
-            if self.varying_lengths and self.training:
-                assert len(self.varying_lengths) == 2
-                length = random.uniform(self.varying_lengths[0], self.varying_lengths[1])
-                self.length_subwav = int(length * self.sample_rate)
-            z1 = super()._get_wav_embedding(wav)
-            if self.compute_mask:
-                self.mask = self.temp_mask  # type: ignore
-            self.temp_mask = None
-
-            if self.transformer is not None:
-                out1 = self.transformer(z1)
-            else:
-                out1 = z1
-            if self.batch_norm:
-                out1 = self.batch_norm(out1.transpose(1, 2)).transpose(1, 2)
-            # Apply quantization
-            if self.rvq:
-                if self.training:
-                    self.rvq.set_num_codebooks(self.n_q_out)
-                else:
-                    self.rvq.set_num_codebooks(self.eval_q)
-                out1 = self.rvq(out1.transpose(1, 2), frame_rate=1.)
-                if self.training:
-                    flashy.distrib.average_tensors(self.rvq.buffers())
-                out1 = out1.x.transpose(1, 2)
-            # Apply fix downsample
-            out1 = out1[:, ::self.ds_factor]
-
-        return out1
-
-    def set_params(self, eval_q: int = 3,
-                   excerpt_length: float = 3.0,
-                   ds_factor: tp.Optional[int] = None, encodec_n_q: tp.Optional[int] = None):
-        """Modify the parameters of the SSL or introduce new parameters to add noise to
-        the conditioning or to downsample it
-
-        Args:
-            eval_q (int): number of codebooks used when evaluating the model
-            excerpt_length (float): the length of the excerpts used to condition the model
-        """
-        self.eval_q = eval_q
-        self.length_subwav = int(excerpt_length * self.sample_rate)
-        if ds_factor is not None:
-            self.ds_factor = ds_factor
-        if encodec_n_q is not None:
-            self.encodec_n_q = encodec_n_q
-
-    def _downsampling_factor(self):
-        df = super()._downsampling_factor()
-        return df * self.ds_factor
-
-    def forward(self, x: WavCondition) -> ConditionType:
-        wav, lengths, *_ = x
-
-        embeds = self._get_wav_embedding(x)
-        embeds = embeds.to(self.output_proj.weight)
-        embeds = self.output_proj(embeds)
-
-        lengths = lengths / self._downsampling_factor()
-        mask = length_to_mask(lengths, max_len=embeds.shape[1]).int()  # type: ignore
-
-        embeds = (embeds * mask.unsqueeze(2).to(self.device))
-
-        return embeds, mask
-
-
-class JointEmbeddingConditioner(BaseConditioner):
-    """Joint embedding conditioning supporting both audio or text conditioning.
-
-    Args:
-        dim (int): Dimension.
-        output_dim (int): Output dimension.
-        device (str): Device.
-        attribute (str): Attribute used by the conditioner.
-        autocast_dtype (str): Autocast for the conditioner.
-        quantize (bool): Whether to quantize the CLAP embedding.
-        n_q (int): Number of residual quantizers (used if quantize is true).
-        bins (int): Quantizers' codebooks size (used if quantize is true).
-        kwargs: Additional parameters for residual vector quantizer.
-    """
-    def __init__(self, dim: int, output_dim: int, device: str, attribute: str,
-                 autocast_dtype: tp.Optional[str] = 'float32', quantize: bool = True,
-                 n_q: int = 12, bins: int = 1024, **kwargs):
-        super().__init__(dim=dim, output_dim=output_dim)
-        self.device = device
-        self.attribute = attribute
-        if autocast_dtype is None or device == 'cpu':
-            self.autocast = TorchAutocast(enabled=False)
-            logger.warning("JointEmbeddingConditioner has no autocast, this might lead to NaN.")
-        else:
-            dtype = getattr(torch, autocast_dtype)
-            assert isinstance(dtype, torch.dtype)
-            logger.info(f"JointEmbeddingConditioner will be evaluated with autocast as {autocast_dtype}.")
-            self.autocast = TorchAutocast(enabled=True, device_type=self.device, dtype=dtype)
-        # residual vector quantizer to discretize the conditioned embedding
-        self.quantizer: tp.Optional[ResidualVectorQuantizer] = None
-        if quantize:
-            self.quantizer = ResidualVectorQuantizer(dim, n_q=n_q, bins=bins, **kwargs)
-
-    def _get_embed(self, x: JointEmbedCondition) -> tp.Tuple[torch.Tensor, torch.Tensor]:
-        """Get joint embedding in latent space from the inputs.
-
-        Returns:
-            tuple[torch.Tensor, torch.Tensor]: Tensor for the latent embedding
-                and corresponding empty indexes.
-        """
-        raise NotImplementedError()
-
-    def forward(self, x: JointEmbedCondition) -> ConditionType:
-        with self.autocast:
-            embed, empty_idx = self._get_embed(x)
-            if self.quantizer is not None:
-                embed = embed.view(-1, self.dim, 1)
-                q_res = self.quantizer(embed, frame_rate=1)
-                out_embed = q_res.x.view(-1, self.dim)
-            else:
-                out_embed = embed
-            out_embed = self.output_proj(out_embed).view(-1, 1, self.output_dim)
-            mask = torch.ones(*out_embed.shape[:2], device=out_embed.device)
-            mask[empty_idx, :] = 0  # zero-out index where the input is non-existant
-            out_embed = (out_embed * mask.unsqueeze(-1))
-            return out_embed, mask
-
-    def tokenize(self, x: JointEmbedCondition) -> JointEmbedCondition:
-        return x
-
-
-class CLAPEmbeddingConditioner(JointEmbeddingConditioner):
-    """Joint Embedding conditioner based on pre-trained CLAP model.
-
-    This CLAP-based conditioner supports a caching mechanism
-    over the computed embeddings for faster training.
-
-    Args:
-        dim (int): Dimension.
-        output_dim (int): Output dimension.
-        device (str): Device.
-        attribute (str): Attribute used by the conditioner.
-        quantize (bool): Whether to quantize the CLAP embedding.
-        n_q (int): Number of residual quantizers (used if quantize is true).
-        bins (int): Quantizers' codebooks size (used if quantize is true).
-        checkpoint (str): Path to CLAP checkpoint.
-        model_arch (str): CLAP model architecture.
-        enable_fusion (bool): Enable fusion for CLAP model.
-        sample_rate (int): Sample rate used by CLAP model.
-        max_audio_length (float): Maximum audio length for CLAP model.
-        audio_stride (float): Stride to use for getting a CLAP embedding on the full sequence.
-        normalize (bool): Whether to normalize the CLAP embedding.
-        text_p (float): Probability of using text representation instead of audio at train time.
-        batch_size (Optional[int]): Batch size for CLAP embedding computation.
-        autocast_dtype (str): Autocast for the conditioner.
-        cache_path (Optional[str]): Path for pre-computed embeddings caching.
-        kwargs: Additional parameters for residual vector quantizer.
-    """
-    def __init__(self, dim: int, output_dim: int, device: str, attribute: str,
-                 quantize: bool, n_q: int, bins: int, checkpoint: tp.Union[str, Path], model_arch: str,
-                 enable_fusion: bool, sample_rate: int, max_audio_length: int, audio_stride: int,
-                 normalize: bool, text_p: bool, batch_size: tp.Optional[int] = None,
-                 autocast_dtype: tp.Optional[str] = 'float32', cache_path: tp.Optional[str] = None, **kwargs):
-        try:
-            import laion_clap  # type: ignore
-        except ImportError:
-            raise ImportError("Please install CLAP to use the CLAPEmbeddingConditioner: 'pip install laion_clap'")
-        warnings.warn("Sample rate for CLAP conditioner was fixed in version v1.1.0, (from 44.1 to 48 kHz). "
-                      "Please retrain all models.")
-        checkpoint = AudioCraftEnvironment.resolve_reference_path(checkpoint)
-        clap_tokenize = RobertaTokenizer.from_pretrained('roberta-base')
-        clap_model = laion_clap.CLAP_Module(enable_fusion=enable_fusion, amodel=model_arch)
-        load_clap_state_dict(clap_model, checkpoint)
-        clap_model.eval()
-        clap_model.to(device)
-        super().__init__(dim=dim, output_dim=output_dim, device=device, attribute=attribute,
-                         autocast_dtype=autocast_dtype, quantize=quantize, n_q=n_q, bins=bins,
-                         **kwargs)
-        self.checkpoint = checkpoint
-        self.enable_fusion = enable_fusion
-        self.model_arch = model_arch
-        self.clap: laion_clap.CLAP_Module
-        self.clap_tokenize: RobertaTokenizer
-        self.clap_sample_rate = sample_rate
-        self.clap_max_frames = int(self.clap_sample_rate * max_audio_length)
-        self.clap_stride = int(self.clap_sample_rate * audio_stride)
-        self.batch_size = batch_size or 1
-        self.normalize = normalize
-        self.text_p = text_p
-        self.__dict__['clap_tokenize'] = clap_tokenize
-        self.__dict__['clap'] = clap_model
-        self.wav_cache, self.text_cache = None, None
-        if cache_path is not None:
-            self.wav_cache = EmbeddingCache(Path(cache_path) / 'wav', self.device,
-                                            compute_embed_fn=self._get_wav_embedding_for_cache,
-                                            extract_embed_fn=self._extract_wav_embedding_chunk)
-            self.text_cache = EmbeddingCache(Path(cache_path) / 'text', self.device,
-                                             compute_embed_fn=self._get_text_embedding_for_cache)
-
-    def _tokenizer(self, texts: tp.Union[str, tp.List[str]]) -> dict:
-        # we use the default params from CLAP module here as well
-        return self.clap_tokenize(texts, padding="max_length", truncation=True, max_length=77, return_tensors="pt")
-
-    def _compute_text_embedding(self, text: tp.List[str]) -> torch.Tensor:
-        """Compute text embedding from CLAP model on a given a batch of text.
-
-        Args:
-            text (list[str]): List of text for the batch, with B items.
-        Returns:
-            torch.Tensor: CLAP embedding derived from text, of shape [B, 1, D], with D the CLAP embedding dimension.
-        """
-        with torch.no_grad():
-            embed = self.clap.get_text_embedding(text, tokenizer=self._tokenizer, use_tensor=True)
-            return embed.view(embed.size(0), 1, embed.size(-1))
-
-    def _get_text_embedding_for_cache(self, path: tp.Union[Path, str],
-                                      x: JointEmbedCondition, idx: int) -> torch.Tensor:
-        """Get text embedding function for the cache."""
-        text = x.text[idx]
-        text = text if text is not None else ""
-        return self._compute_text_embedding([text])[0]
-
-    def _preprocess_wav(self, wav: torch.Tensor, length: torch.Tensor, sample_rates: tp.List[int]) -> torch.Tensor:
-        """Preprocess wav to expected format by CLAP model.
-
-        Args:
-            wav (torch.Tensor): Audio wav, of shape [B, C, T].
-            length (torch.Tensor): Actual length of the audio for each item in the batch, of shape [B].
-            sample_rates (list[int]): Sample rates for each sample in the batch
-        Returns:
-            torch.Tensor: Audio wav of shape [B, T].
-        """
-        assert wav.dim() == 3, "Expecting wav to be [B, C, T]"
-        if sample_rates is not None:
-            _wav = []
-            for i, audio in enumerate(wav):
-                sr = sample_rates[i]
-                audio = convert_audio(audio, from_rate=sr, to_rate=self.clap_sample_rate, to_channels=1)
-                _wav.append(audio)
-            wav = torch.stack(_wav, dim=0)
-        wav = wav.mean(dim=1)
-        return wav
-
-    def _compute_wav_embedding(self, wav: torch.Tensor, length: torch.Tensor,
-                               sample_rates: tp.List[int], reduce_mean: bool = False) -> torch.Tensor:
-        """Compute audio wave embedding from CLAP model.
-
-        Since CLAP operates on a fixed sequence length audio inputs and we need to process longer audio sequences,
-        we calculate the wav embeddings on `clap_max_frames` windows with `clap_stride`-second stride and
-        average the resulting embeddings.
-
-        Args:
-            wav (torch.Tensor): Audio wav, of shape [B, C, T].
-            length (torch.Tensor): Actual length of the audio for each item in the batch, of shape [B].
-            sample_rates (list[int]): Sample rates for each sample in the batch.
-            reduce_mean (bool): Whether to get the average tensor.
-        Returns:
-            torch.Tensor: Audio embedding of shape [B, F, D], F being the number of chunks, D the dimension.
-        """
-        with torch.no_grad():
-            wav = self._preprocess_wav(wav, length, sample_rates)
-            B, T = wav.shape
-            if T >= self.clap_max_frames:
-                wav = wav.unfold(-1, self.clap_max_frames, self.clap_stride)  # [B, F, T]
-            else:
-                wav = wav.view(-1, 1, T)  # [B, F, T] with F=1
-            wav = einops.rearrange(wav, 'b f t -> (b f) t')
-            embed_list = []
-            for i in range(0, wav.size(0), self.batch_size):
-                _wav = wav[i:i+self.batch_size, ...]
-                _embed = self.clap.get_audio_embedding_from_data(_wav, use_tensor=True)
-                embed_list.append(_embed)
-            embed = torch.cat(embed_list, dim=0)
-            embed = einops.rearrange(embed, '(b f) d -> b f d', b=B)
-            if reduce_mean:
-                embed = embed.mean(dim=1, keepdim=True)
-            return embed  # [B, F, D] with F=1 if reduce_mean is True
-
-    def _get_wav_embedding_for_cache(self, path: tp.Union[str, Path],
-                                     x: JointEmbedCondition, idx: int) -> torch.Tensor:
-        """Compute audio wave embedding for the cache.
-        The embedding is computed on a given audio read from file.
-
-        Args:
-            path (str or Path): Path to the full audio file.
-        Returns:
-            torch.Tensor: Single-item tensor of shape [F, D], F being the number of chunks, D the dimension.
-        """
-        wav, sr = audio_read(path)  # [C, T]
-        wav = wav.unsqueeze(0).to(self.device)  # [1, C, T]
-        wav_len = torch.LongTensor([wav.shape[-1]]).to(self.device)
-        embed = self._compute_wav_embedding(wav, wav_len, [sr], reduce_mean=False)  # [B, F, D]
-        return embed.squeeze(0)  # [F, D]
-
-    def _extract_wav_embedding_chunk(self, full_embed: torch.Tensor, x: JointEmbedCondition, idx: int) -> torch.Tensor:
-        """Extract the chunk of embedding matching the seek_time and length from the full CLAP audio embedding.
-
-        Args:
-            full_embed (torch.Tensor): CLAP embedding computed on the full wave, of shape [F, D].
-            x (JointEmbedCondition): Joint embedding condition for the full batch.
-            idx (int): Index considered for the given embedding to extract.
-        Returns:
-            torch.Tensor: Wav embedding averaged on sliding window, of shape [1, D].
-        """
-        sample_rate = x.sample_rate[idx]
-        seek_time = x.seek_time[idx]
-        seek_time = 0. if seek_time is None else seek_time
-        clap_stride = int(self.clap_stride / self.clap_sample_rate) * sample_rate
-        end_seek_time = seek_time + self.clap_max_frames / self.clap_sample_rate
-        start_offset = int(seek_time * sample_rate // clap_stride)
-        end_offset = int(end_seek_time * sample_rate // clap_stride)
-        wav_embed = full_embed[start_offset:end_offset, ...]
-        wav_embed = wav_embed.mean(dim=0, keepdim=True)
-        return wav_embed.to(self.device)  # [F, D]
-
-    def _get_text_embedding(self, x: JointEmbedCondition) -> torch.Tensor:
-        """Get CLAP embedding from a batch of text descriptions."""
-        no_nullified_cond = x.wav.shape[-1] > 1  # we don't want to read from cache when condition dropout
-        if self.text_cache is not None and no_nullified_cond:
-            assert all(p is not None for p in x.path), "Cache requires all JointEmbedCondition paths to be provided"
-            paths = [Path(p) for p in x.path if p is not None]
-            embed = self.text_cache.get_embed_from_cache(paths, x)
-        else:
-            text = [xi if xi is not None else "" for xi in x.text]
-            embed = self._compute_text_embedding(text)
-        if self.normalize:
-            embed = torch.nn.functional.normalize(embed, p=2.0, dim=-1)
-        return embed
-
-    def _get_wav_embedding(self, x: JointEmbedCondition) -> torch.Tensor:
-        """Get CLAP embedding from a batch of audio tensors (and corresponding sample rates)."""
-        no_undefined_paths = all(p is not None for p in x.path)
-        no_nullified_cond = x.wav.shape[-1] > 1  # we don't want to read from cache when condition dropout
-        if self.wav_cache is not None and no_undefined_paths and no_nullified_cond:
-            paths = [Path(p) for p in x.path if p is not None]
-            embed = self.wav_cache.get_embed_from_cache(paths, x)
-        else:
-            embed = self._compute_wav_embedding(x.wav, x.length, x.sample_rate, reduce_mean=True)
-        if self.normalize:
-            embed = torch.nn.functional.normalize(embed, p=2.0, dim=-1)
-        return embed
-
-    def tokenize(self, x: JointEmbedCondition) -> JointEmbedCondition:
-        # Trying to limit as much as possible sync points when the cache is warm.
-        no_undefined_paths = all(p is not None for p in x.path)
-        if self.wav_cache is not None and no_undefined_paths:
-            assert all([p is not None for p in x.path]), "Cache requires all JointEmbedCondition paths to be provided"
-            paths = [Path(p) for p in x.path if p is not None]
-            self.wav_cache.populate_embed_cache(paths, x)
-        if self.text_cache is not None and no_undefined_paths:
-            assert all([p is not None for p in x.path]), "Cache requires all JointEmbedCondition paths to be provided"
-            paths = [Path(p) for p in x.path if p is not None]
-            self.text_cache.populate_embed_cache(paths, x)
-        return x
-
-    def _get_embed(self, x: JointEmbedCondition) -> tp.Tuple[torch.Tensor, torch.Tensor]:
-        """Extract shared latent representation from either the wav or the text using CLAP."""
-        # decide whether to use text embedding at train time or not
-        use_text_embed = random.random() < self.text_p
-        if self.training and not use_text_embed:
-            embed = self._get_wav_embedding(x)
-            empty_idx = torch.LongTensor([])  # we assume we always have the audio wav
-        else:
-            embed = self._get_text_embedding(x)
-            empty_idx = torch.LongTensor([i for i, xi in enumerate(x.text) if xi is None or xi == ""])
-        return embed, empty_idx
-
-
-def dropout_symbolic_conditions(sample: ConditioningAttributes,
-                                condition: str, null_chord_idx: int = 194) -> ConditioningAttributes:
-    """
-    Applies dropout to symbolic conditions within the sample based on the specified condition by setting the condition
-    value to a null index.
-    Args:
-        sample (ConditioningAttributes): The sample containing symbolic attributes to potentially dropout.
-        condition (str): The specific condition within the symbolic attributes to apply dropout.
-        null_chord_idx (int, optional): The index used to represent a null chord. Defaults to 194.
-    Returns:
-        ConditioningAttributes: The modified sample with dropout applied to the specified condition.
-    Raises:
-        ValueError: If the specified condition is not present in the sample's symbolic attributes.
-    """
-    if sample.symbolic == {} or sample.symbolic[JascoCondConst.CRD.value].frame_chords.shape[-1] <= 1:  # type: ignore
-        # nothing to drop
-        return sample
-
-    if condition not in getattr(sample, 'symbolic'):
-        raise ValueError(
-            "dropout_symbolic_condition received an unexpected condition!"
-            f" expected {sample.symbolic.keys()}"
-            f" but got '{condition}'!"
-        )
-
-    if condition == JascoCondConst.CRD.value:
-        sample.symbolic[condition] = nullify_chords(sample.symbolic[condition], null_chord_idx=null_chord_idx)
-    elif condition == JascoCondConst.MLD.value:
-        sample.symbolic[condition] = nullify_melody(sample.symbolic[condition])
-
-    return sample
-
-
 def dropout_condition(sample: ConditioningAttributes,
                       condition_type: str, condition: str,
                       **kwargs) -> ConditioningAttributes:
@@ -1603,7 +903,7 @@ def dropout_condition(sample: ConditioningAttributes,
     If the condition is of any other type, set its value to None.
     Works in-place.
     """
-    if condition_type not in ['text', 'wav', 'joint_embed', 'symbolic']:
+    if condition_type not in ['text', 'wav', 'joint_embed', 'video']:
         raise ValueError(
             "dropout_condition got an unexpected condition type!"
             f" expected 'text', 'wav' or 'joint_embed' but got '{condition_type}'"
@@ -1622,8 +922,8 @@ def dropout_condition(sample: ConditioningAttributes,
     elif condition_type == 'joint_embed':
         embed = sample.joint_embed[condition]
         sample.joint_embed[condition] = nullify_joint_embed(embed)
-    elif condition_type == 'symbolic':
-        sample = dropout_symbolic_conditions(sample=sample, condition=condition, **kwargs)
+    elif condition_type == 'video':
+        sample.video[condition] = None
     else:
         sample.text[condition] = None
 
@@ -1698,7 +998,7 @@ class ClassifierFreeGuidanceDropout(DropoutModule):
         self.p = p
 
     def forward(self, samples: tp.List[ConditioningAttributes],
-                cond_types: tp.List[str] = ["wav", "text"],
+                cond_types: tp.List[str] = ["wav", "text", "video"],
                 **kwargs) -> tp.List[ConditioningAttributes]:
         """
         Args:
@@ -1719,8 +1019,7 @@ class ClassifierFreeGuidanceDropout(DropoutModule):
         for condition_type in cond_types:
             for sample in samples:
                 for condition in sample.attributes[condition_type]:
-                    dropout_condition(sample, condition_type, condition,
-                                      **kwargs)
+                    dropout_condition(sample, condition_type, condition, **kwargs)
         return samples
 
     def __repr__(self):
@@ -1734,11 +1033,14 @@ class ConditioningProvider(nn.Module):
         conditioners (dict): Dictionary of conditioners.
         device (torch.device or str, optional): Device for conditioners and output condition types.
     """
-    def __init__(self, conditioners: tp.Dict[str, BaseConditioner], device: tp.Union[torch.device, str] = "cpu", cond_type: tp.Optional[str] = "video"):
+    def __init__(
+            self, 
+            conditioners: tp.Dict[str, BaseConditioner], 
+            device: tp.Union[torch.device, str] = "cpu", 
+        ):
         super().__init__()
         self.device = device
         self.conditioners = nn.ModuleDict(conditioners)
-        self.cond_type = cond_type
 
     @property
     def joint_embed_conditions(self):
@@ -1779,43 +1081,18 @@ class ConditioningProvider(nn.Module):
         )
 
         output = {}
-        #text = self._collate_text(inputs)
-
-        if self.cond_type == 'text':
-            text = self._collate_text(inputs)
-            assert set(text.keys()).issubset(set(self.conditioners.keys())), (
-                f"Got an unexpected attribute! Expected {self.conditioners.keys()}, ",
-                f"got {text.keys()}"
-            )
-        elif self.cond_type == 'video':
-            video = self._collate_video(inputs)
-            assert set(video.keys()).issubset(set(self.conditioners.keys())), (
-                f"Got an unexpected attribute! Expected {self.conditioners.keys()}, ",
-                f"got {video.keys()}"
-            )
-        else:
-            raise ValueError(f"Got unexpected type {type} for tokenization!")
-
+        text = self._collate_text(inputs)
+        video = self._collate_video(inputs)
         wavs = self._collate_wavs(inputs)
         joint_embeds = self._collate_joint_embeds(inputs)
 
-        assert set(wavs.keys() | joint_embeds.keys()).issubset(set(self.conditioners.keys())), (
+        assert set(text.keys() | video.keys() | wavs.keys() | joint_embeds.keys()).issubset(set(self.conditioners.keys())), (
             f"Got an unexpected attribute! Expected {self.conditioners.keys()}, ",
             f"got {text.keys(), wavs.keys(), joint_embeds.keys()}"
         )
 
-        # for attribute, batch in chain(text.items(), wavs.items(), joint_embeds.items()):
-        #     output[attribute] = self.conditioners[attribute].tokenize(batch)
-
-        if self.cond_type == 'text':
-            for attribute, batch in chain(text.items(), wavs.items(), joint_embeds.items()):
-                output[attribute] = self.conditioners[attribute].tokenize(batch)
-        elif self.cond_type == 'video':
-            for attribute, batch in chain(video.items(), wavs.items(), joint_embeds.items()):
-                output[attribute] = self.conditioners[attribute].tokenize(batch)
-        else:
-            raise ValueError(f"Got unexpected type {type} for tokenization!")
-
+        for attribute, batch in chain(text.items(), video.items(), wavs.items(), joint_embeds.items()):
+            output[attribute] = self.conditioners[attribute].tokenize(batch)
         return output
 
     def forward(self, tokenized: tp.Dict[str, tp.Any]) -> tp.Dict[str, ConditionType]:
@@ -1869,12 +1146,12 @@ class ConditioningProvider(nn.Module):
         For example:
         Input:
         [
-            ConditioningAttributes(video={"visual_content": "/data1/1.pt"}, wav=...),
-            ConditioningAttributes(video={"visual_content": "/data1/2.pt"}, wav=...),
+            ConditioningAttributes(video={"visual_content": "/data1/1.mp4"}, wav=...),
+            ConditioningAttributes(video={"visual_content": "/data1/2.mp4"}, wav=...),
         ]
         Output:
         {
-            "visual_content": ["/data1/1.pt", "/data1/2.pt"]
+            "visual_content": ["/data1/1.mp4", "/data1/2.mp4"]
         }
 
         Args:
@@ -1946,6 +1223,7 @@ class ConditioningProvider(nn.Module):
             A dictionary mapping an attribute name to joint embeddings.
         """
         texts = defaultdict(list)
+        video = defaultdict(list)
         wavs = defaultdict(list)
         lengths = defaultdict(list)
         sample_rates = defaultdict(list)
@@ -1956,7 +1234,7 @@ class ConditioningProvider(nn.Module):
         out = {}
         for sample in samples:
             for attribute in self.joint_embed_conditions:
-                wav, text, length, sample_rate, path, seek_time = sample.joint_embed[attribute]
+                wav, text, video, length, sample_rate, path, seek_time = sample.joint_embed[attribute]
                 assert wav.dim() == 3
                 if channels == 0:
                     channels = wav.size(1)
@@ -1966,6 +1244,7 @@ class ConditioningProvider(nn.Module):
                 wav = einops.rearrange(wav, "b c t -> (b c t)")  # [1, C, T] => [C * T]
                 wavs[attribute].append(wav)
                 texts[attribute].extend(text)
+                video[attribute].extend(video)
                 lengths[attribute].append(length)
                 sample_rates[attribute].extend(sample_rate)
                 paths[attribute].extend(path)
@@ -1973,6 +1252,7 @@ class ConditioningProvider(nn.Module):
 
         for attribute in self.joint_embed_conditions:
             stacked_texts = texts[attribute]
+            stacked_video = video[attribute]
             stacked_paths = paths[attribute]
             stacked_seek_times = seek_times[attribute]
             stacked_wavs = pad_sequence(wavs[attribute]).to(self.device)
@@ -1983,9 +1263,14 @@ class ConditioningProvider(nn.Module):
             assert len(stacked_sample_rates) == stacked_wavs.size(0)
             assert len(stacked_texts) == stacked_wavs.size(0)
             out[attribute] = JointEmbedCondition(
-                text=stacked_texts, wav=stacked_wavs,
-                length=stacked_lengths, sample_rate=stacked_sample_rates,
-                path=stacked_paths, seek_time=stacked_seek_times)
+                text=stacked_texts, 
+                video=stacked_video, 
+                wav=stacked_wavs,
+                length=stacked_lengths, 
+                sample_rate=stacked_sample_rates,
+                path=stacked_paths, 
+                seek_time=stacked_seek_times
+            )
 
         return out
 
@@ -2005,7 +1290,7 @@ class ConditionFuser(StreamingModule):
         cross_attention_pos_emb (bool, optional): Use positional embeddings in cross attention.
         cross_attention_pos_emb_scale (int): Scale for positional embeddings in cross attention if used.
     """
-    FUSING_METHODS = ["sum", "prepend", "cross", "ignore", "input_interpolate"]
+    FUSING_METHODS = ["sum", "prepend", "cross", "cross_sum", "ignore", "input_interpolate"]
 
     def __init__(self, fuse2cond: tp.Dict[str, tp.List[str]], cross_attention_pos_emb: bool = False,
                  cross_attention_pos_emb_scale: float = 1.0):
@@ -2048,9 +1333,10 @@ class ConditionFuser(StreamingModule):
         assert set(conditions.keys()).issubset(set(self.cond2fuse.keys())), \
             f"given conditions contain unknown attributes for fuser, " \
             f"expected {self.cond2fuse.keys()}, got {conditions.keys()}"
+
         cross_attention_output = None
         for cond_type, (cond, cond_mask) in conditions.items():
-            op = self.cond2fuse[cond_type]
+            op = self.cond2fuse[cond_type]            
             if op == 'sum':
                 input += cond
             elif op == 'input_interpolate':
@@ -2063,6 +1349,11 @@ class ConditionFuser(StreamingModule):
             elif op == 'cross':
                 if cross_attention_output is not None:
                     cross_attention_output = torch.cat([cross_attention_output, cond], dim=1)
+                else:
+                    cross_attention_output = cond
+            elif op == 'cross_sum':
+                if cross_attention_output is not None:
+                    cross_attention_output += cond
                 else:
                     cross_attention_output = cond
             elif op == 'ignore':

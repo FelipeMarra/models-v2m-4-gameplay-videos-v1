@@ -558,15 +558,20 @@ class StandardSolver(ABC, flashy.BaseSolver):
     def run(self):
         """Training loop."""
         assert len(self.state_dict()) > 0
+
         if self.cfg.get('ignore_state_conditioner'):
             self.restore(replay_metrics=True, ignore_state_conditioner=self.cfg.ignore_state_conditioner)  # load checkpoint and replay history
         else:
             self.restore(replay_metrics=True)  # load checkpoint and replay history
+
         self.log_hyperparams(dict_from_config(self.cfg))
+
         for epoch in range(self.epoch, self.cfg.optim.epochs + 1):
             if self.should_stop_training():
                 return
+
             self.run_epoch()
+
             # Commit will send the metrics to Dora and save checkpoints by default.
             self.commit()
 

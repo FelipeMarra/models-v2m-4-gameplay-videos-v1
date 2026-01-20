@@ -24,7 +24,7 @@ from ..data.audio_dataset import AudioDataset
 from ..data.music_dataset import MusicDataset, MusicInfo, AudioInfo
 from ..data.audio_utils import normalize_audio
 from ..modules.conditioners import JointEmbedCondition, SegmentWithAttributes, WavCondition, \
-            StyleConditioner, _drop_description_condition
+            _drop_description_condition
 from ..utils.cache import CachedBatchWriter, CachedBatchLoader
 from ..utils.samples.manager import SampleManager
 from ..utils.utils import get_dataset_from_loader, is_jsonable, warn_once, model_hash
@@ -377,11 +377,7 @@ class MusicGenSolver(base.StandardSolver):
                 info.audio_tokens = one_audio_tokens.short().cpu()
             self._cached_batch_writer.save(infos)
 
-        #TODO: Why the F GVMGen return attributes directly isntead of condition tensors???
-        #TODO: Why the F when tokenized = self.model.condition_provider.tokenize(attributes) is called, my ViViTConditioner tokenize function is not called
-        #print(f" ---> _prepare_tokens_and_attributes, condition_tensors:\n {condition_tensors}")
-
-        return attributes, audio_tokens, padding_mask
+        return condition_tensors, audio_tokens, padding_mask
 
     def run_step(self, idx: int, batch: tp.Tuple[torch.Tensor, tp.List[SegmentWithAttributes]], metrics: dict) -> dict:
         """Perform one training or valid step on a given batch."""
@@ -397,11 +393,8 @@ class MusicGenSolver(base.StandardSolver):
 
         with self.autocast:
             style_mask = None
-            if hasattr(self.model.condition_provider.conditioners, 'self_wav'):
-                if isinstance(self.model.condition_provider.conditioners.self_wav, StyleConditioner):
-                    style_mask = self.model.condition_provider.conditioners.self_wav.mask
 
-            model_output = self.model.compute_predictions(audio_tokens, condition_tensors)
+            model_output = self.model.compute_predictions(audio_tokens, [], condition_tensors)
             logits = model_output.logits
             if style_mask is not None:
                 mask = padding_mask & model_output.mask & style_mask
@@ -658,12 +651,14 @@ class MusicGenSolver(base.StandardSolver):
         """
         if self._cached_batch_writer is not None:
             self._cached_batch_writer.start_epoch(self.epoch)
+
         if self._cached_batch_loader is None:
             dataset = get_dataset_from_loader(self.dataloaders['train'])
             assert isinstance(dataset, AudioDataset)
             dataset.current_epoch = self.epoch
         else:
             self._cached_batch_loader.start_epoch(self.epoch)
+
         return super().train()
 
     def evaluate_audio_generation(self) -> dict:

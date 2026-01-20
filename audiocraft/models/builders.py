@@ -23,11 +23,11 @@ from ..modules.codebooks_patterns import (CoarseFirstPattern,
                                           MusicLMPattern,
                                           ParallelPatternProvider,
                                           UnrolledPatternProvider)
-from ..modules.conditioners import (BaseConditioner, ChromaStemConditioner,
-                                    CLAPEmbeddingConditioner,
-                                    ConditionFuser, JascoCondConst,
-                                    ConditioningProvider, LUTConditioner,
-                                    T5Conditioner, ViViTConditioner, StyleConditioner)
+from ..modules.conditioners import (BaseConditioner,
+                                    ConditionFuser,
+                                    ConditioningProvider,
+                                    T5Conditioner, 
+                                    ViViTConditioner)
 from ..utils.utils import dict_from_config
 from .encodec import (CompressionModel, EncodecModel,
                       InterleaveStereoCompressionModel)
@@ -98,7 +98,7 @@ def get_lm_model(cfg: omegaconf.DictConfig) -> LMModel:
         )
         fuser = get_condition_fuser(cfg)
         condition_provider = get_conditioner_provider(kwargs["dim"], cfg).to(cfg.device)
-        if len(fuser.fuse2cond["cross"]) > 0:  # enforce cross-att programmatically
+        if len(fuser.fuse2cond["cross"]) or len(fuser.fuse2cond["cross_sum"]) > 0:  # enforce cross-att programmatically
             kwargs["cross_attention"] = True
         if codebooks_pattern_cfg.modeling is None:
             assert (
@@ -145,31 +145,6 @@ def get_conditioner_provider(
             conditioners[str(cond)] = T5Conditioner(
                 output_dim=output_dim, device=device, **model_args
             )
-        elif model_type == "lut":
-            conditioners[str(cond)] = LUTConditioner(
-                output_dim=output_dim, **model_args
-            )
-        elif model_type == "chroma_stem":
-            conditioners[str(cond)] = ChromaStemConditioner(
-                output_dim=output_dim, duration=duration, device=device, **model_args
-            )
-        elif model_type in {"chords_emb", "drum_latents", "melody"}:
-            # conditioners_classes = {"chords_emb": ChordsEmbConditioner,
-            #                         "drum_latents": DrumsConditioner,
-            #                         "melody": MelodyConditioner}
-            conditioners_classes = {}
-            conditioner_class = conditioners_classes[model_type]
-            conditioners[str(cond)] = conditioner_class(device=device, **model_args)
-        elif model_type == "clap":
-            conditioners[str(cond)] = CLAPEmbeddingConditioner(
-                output_dim=output_dim, device=device, **model_args
-            )
-        elif model_type == 'style':
-            conditioners[str(cond)] = StyleConditioner(
-                output_dim=output_dim,
-                device=device,
-                **model_args
-            )
         elif model_type == 'video':
             conditioners[str(cond)] = ViViTConditioner(
                 output_dim=output_dim,
@@ -178,16 +153,18 @@ def get_conditioner_provider(
             )
         else:
             raise ValueError(f"Unrecognized conditioning model: {model_type}")
+    
     conditioner = ConditioningProvider(
         conditioners, device=device, **condition_provider_args
     )
+    
     return conditioner
 
 
 def get_condition_fuser(cfg: omegaconf.DictConfig) -> ConditionFuser:
     """Instantiate a condition fuser object."""
     fuser_cfg = getattr(cfg, "fuser")
-    fuser_methods = ["sum", "cross", "prepend", "ignore", "input_interpolate"]
+    fuser_methods = ["sum", "cross", "cross_sum","prepend", "ignore", "input_interpolate"]
     fuse2cond = {k: fuser_cfg[k] for k in fuser_methods if k in fuser_cfg}
     kwargs = {k: v for k, v in fuser_cfg.items() if k not in fuser_methods}
     fuser = ConditionFuser(fuse2cond=fuse2cond, **kwargs)

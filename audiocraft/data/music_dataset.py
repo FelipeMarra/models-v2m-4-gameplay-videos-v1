@@ -255,11 +255,11 @@ class MusicDataset(InfoAudioDataset):
         for att in self.joint_embed_attributes:
             att_value = getattr(music_info, att)
             joint_embed_cond = JointEmbedCondition(
-                wav[None], [att_value], torch.tensor([info.n_frames]),
+                wav[None], [att_value], [music_info.video], torch.tensor([info.n_frames]),
                 sample_rate=[info.sample_rate], path=[info.meta.path], seek_time=[info.seek_time])
             music_info.joint_embed[att] = joint_embed_cond
 
-        #print(f"\n-----> MusicDataset music_info: {music_info} \n")
+        # print(f"\n-----> MusicDataset music_info: {music_info.description} \n")
 
         return wav, music_info
 

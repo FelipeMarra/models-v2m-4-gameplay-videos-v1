@@ -246,7 +246,7 @@ class LMModel(StreamingModule):
             assert not self._is_streaming, "Conditions tensors should be precomputed when streaming."
             # apply dropout modules
             conditions = self.cfg_dropout(conditions)
-            #conditions = self.att_dropout(conditions)
+            conditions = self.att_dropout(conditions)
             tokenized = self.condition_provider.tokenize(conditions)
             # encode conditions and fuse, both have a streaming cache to not recompute when generating.
             condition_tensors = self.condition_provider(tokenized)

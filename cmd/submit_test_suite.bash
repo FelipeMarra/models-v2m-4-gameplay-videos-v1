@@ -37,7 +37,7 @@ export USER=vivit_felipe # Will create an audiocraft_vivit_felipe folder inside 
 export PYTORCH_MPS_HIGH_WATERMARK_RATIO=0.0
 export OMP_NUM_THREADS=1
 
-python3 -u /home/es119256/dados/repos/visual-bardo-video/scripts/test_suite/test_suite.py --model_sig fc1b8bab
+python3 -u /home/es119256/dados/repos/visual-bardo-video/scripts/test_suite/test_suite.py
 
 echo "Memória final: $(free -h | grep Mem:)"
 echo "Finalizado em: $(date)"

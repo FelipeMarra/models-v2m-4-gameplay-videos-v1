@@ -4,7 +4,7 @@ datasource:
   max_sample_rate: 44100
   max_channels: 2
 
-  train: egs/mock/eval
+  train: egs/mock/train
   valid: egs/mock/eval
-  evaluate: egs/mock/eval
-  generate: egs/mock/eval
+  evaluate: egs/mock/test
+  generate: egs/mock/test

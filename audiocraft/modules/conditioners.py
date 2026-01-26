@@ -300,6 +300,7 @@ class BaseConditioner(nn.Module):
         self.output_dim = output_dim
         self.output_tkns_dim = output_tkns_dim
         self.seq_len = seq_len
+        self.output_tkns_proj = None
 
         if self.output_dim > -1:  # omit projection when output_dim <= 0
             self.output_proj = nn.Linear(self.dim, self.output_dim)
@@ -492,13 +493,20 @@ class T5Conditioner(TextConditioner):
 
         empty_idx = torch.LongTensor([i for i, xi in enumerate(entries) if xi == ""])
 
-        inputs = self.t5_tokenizer(
-            entries, 
-            return_tensors='pt', 
-            padding='max_length', 
-            truncation=True, 
-            max_length=self.seq_len
-        ).to(self.device)
+        if self.seq_len > -1:
+            inputs = self.t5_tokenizer(
+                entries, 
+                return_tensors='pt', 
+                padding='max_length', 
+                truncation=True, 
+                max_length=self.seq_len
+            ).to(self.device)
+        else:
+            inputs = self.t5_tokenizer(
+                entries, 
+                return_tensors='pt', 
+                padding='max_length'
+            ).to(self.device)
 
         mask = inputs['attention_mask']
         mask[empty_idx, :] = 0  # type: ignore # zero-out index where the input is non-existant

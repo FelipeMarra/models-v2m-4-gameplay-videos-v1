@@ -98,8 +98,6 @@ metrics:
       model_path: //reference/clap/tuned_epoch_15.pt
       model_arch: 'HTSAT-base'
       enable_fusion: false
-  save_eval_gen:
-    path: eval_gen
 
 generate:
   every: 25

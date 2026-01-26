@@ -3,12 +3,12 @@
 #
 # This source code is licensed under the license found in the
 # LICENSE file in the root directory of this source tree.
-
+import os
 from pathlib import Path
 import time
 import typing as tp
-import warnings
 
+import dora
 import flashy
 import math
 import omegaconf
@@ -29,7 +29,6 @@ from ..utils.samples.manager import SampleManager
 from ..utils.utils import get_dataset_from_loader, is_jsonable, model_hash
 
 from audiocraft.data.audio import audio_write
-from audiocraft.data.audio_utils import convert_audio
 
 class MusicGenSolver(base.StandardSolver):
     """Solver for MusicGen training task.
@@ -796,10 +795,30 @@ class MusicGenSolver(base.StandardSolver):
                     gt_tuned_text_consistency.update(y, texts, sizes, sample_rates)
 
                 if self.cfg.evaluate.metrics.save_eval_gen:
-                    audio_write(
-                        self.samples_tests_dir / stem_name, pred_wav, sample_rate=32000,
-                        format="wav", strategy="peak"
-                    )
+                    xp_folder = dora.get_xp().folder # type: ignore
+                    base_folder = os.path.join(xp_folder, 'eval_gen')
+                    pred_folder = os.path.join(base_folder, 'pred')
+
+                    if not os.path.exists(pred_folder):
+                        os.makedirs(pred_folder)
+
+                    csv_file = os.path.join(base_folder, 'pred_to_orig.csv')
+
+                    rows = ''
+                    if not os.path.exists(csv_file):
+                        head=f"y_pred_path,y_path,y_seek,json_path\n"
+                        rows += head
+
+                    for idx, m in enumerate(meta):
+                        audio_stem = Path(m.meta.path).stem + f"_{m.seek_time}"
+                        pred_file = os.path.join(pred_folder, audio_stem)
+
+                        audio_write(pred_file, y_pred[idx], sample_rate=32000)
+
+                        rows += f"{pred_file},{m.meta.path},{m.seek_time},{m.meta.json_path}\n"
+
+                    with open(csv_file, 'a') as f:
+                        f.write(rows)
 
             flashy.distrib.barrier()
             if fad is not None:

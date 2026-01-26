@@ -1,5 +1,5 @@
 #!/bin/bash
-#SBATCH --job-name=eval_txt          # Nome do job
+#SBATCH --job-name=eval_txt_test          # Nome do job
 #SBATCH --mail-type=ALL                 # Opções: BEGIN, END, FAIL, ALL, etc.
 #SBATCH --mail-user=felipeferreiramarra@gmail.com       # Endereço de e-mail destinatário
 #SBATCH --partition=scientific          # Partição
@@ -44,11 +44,11 @@ dora -P audiocraft run \
     autocast=true \
     solver=musicgen/musicgen_base_32khz \
     model/lm/model_scale=medium \
-    continue_from=/app/xps/audiocraft_felipe/xps/5aa5e26a_medium_random_no_t5 \
+    continue_from=/home/es119256/dados/xps/audiocraft_felipe/xps/d6698d5d_medium_random \
     conditioner=text2music \
     conditioners.description.t5.name=t5-base \
     conditioners.description.t5.finetune=true \
-    dset=snes_mvdb \
+    dset=mock \
     dataset.num_workers=4 \
     dataset.batch_size=32 \
     +dataset.evaluate.batch_size=32 \

@@ -310,14 +310,10 @@ class BaseConditioner(nn.Module):
 
     def apply_output_tkns_proj(self, x:torch.Tensor, name="") -> torch.Tensor:
         if self.output_tkns_proj:
-            # B, Seq_len, output_dim
-            B, S, O = x.shape
-            # print(f"\n {name} apply_output_tkns_proj, x.shape: {x.shape} \n")
-
             # Put Seq_len in the last dim, apply layer to change num of tokens and reshape back
             x = x.permute(0, 2, 1) # B, S, O (batch, seq_len, out_dim) -> B, O, S
             x = self.output_tkns_proj(x)
-            x = x.permute(0, 2, 1) # B, S, O -> B, O, S
+            x = x.permute(0, 2, 1) # B, O, S -> B, S, O
 
         return x
 
@@ -518,8 +514,12 @@ class T5Conditioner(TextConditioner):
             embeds = self.t5(**inputs).last_hidden_state
 
         embeds = self.output_proj(embeds.to(self.output_proj.weight))
+
         # print(f"\n T5 mask shape: {mask.shape} \n")
+        if self.output_tkns_proj:
+            mask = torch.ones_like(mask)
         embeds = (embeds * mask.unsqueeze(-1))
+        
         embeds = self.apply_output_tkns_proj(embeds, name=self.name)
 
         return embeds, mask
@@ -736,8 +736,12 @@ class ViViTConditioner(VideoConditioner):
 
         embeds = embeds.to(self.output_proj.weight)
         embeds = self.output_proj(embeds)
+
         # print(f"\n ViViT mask shape: {mask.shape} \n")
+        if self.output_tkns_proj:
+            mask = torch.ones_like(mask)
         embeds = (embeds * mask.unsqueeze(-1).to(self.device))
+
         embeds = self.apply_output_tkns_proj(embeds, name=self.name)
 
         return embeds, mask

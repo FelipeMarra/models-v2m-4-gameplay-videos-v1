@@ -8,7 +8,6 @@ from pathlib import Path
 import time
 import typing as tp
 import warnings
-from copy import deepcopy
 
 import flashy
 import math
@@ -27,8 +26,10 @@ from ..modules.conditioners import JointEmbedCondition, SegmentWithAttributes, W
             _drop_description_condition
 from ..utils.cache import CachedBatchWriter, CachedBatchLoader
 from ..utils.samples.manager import SampleManager
-from ..utils.utils import get_dataset_from_loader, is_jsonable, warn_once, model_hash
+from ..utils.utils import get_dataset_from_loader, is_jsonable, model_hash
 
+from audiocraft.data.audio import audio_write
+from audiocraft.data.audio_utils import convert_audio
 
 class MusicGenSolver(base.StandardSolver):
     """Solver for MusicGen training task.
@@ -674,9 +675,7 @@ class MusicGenSolver(base.StandardSolver):
         gt_text_consistency: tp.Optional[eval_metrics.TextConsistencyMetric] = None
         tuned_text_consistency: tp.Optional[eval_metrics.TextConsistencyMetric] = None
         gt_tuned_text_consistency: tp.Optional[eval_metrics.TextConsistencyMetric] = None
-        chroma_cosine: tp.Optional[eval_metrics.ChromaCosineSimilarityMetric] = None
         should_run_eval = False
-        eval_chroma_wavs: tp.Optional[torch.Tensor] = None
 
         if self.cfg.evaluate.metrics.fad:
             fad = builders.get_fad(self.cfg.metrics.fad).to(self.device)
@@ -708,18 +707,6 @@ class MusicGenSolver(base.StandardSolver):
 
         if self.cfg.evaluate.metrics.gt_tuned_text_consistency:
             gt_tuned_text_consistency = builders.get_text_consistency(self.cfg.metrics.tuned_text_consistency).to(self.device)
-            should_run_eval = True
-
-        if self.cfg.evaluate.metrics.chroma_cosine:
-            chroma_cosine = builders.get_chroma_cosine_similarity(self.cfg.metrics.chroma_cosine).to(self.device)
-            # if we have predefind wavs for chroma we should purge them for computing the cosine metric
-            has_predefined_eval_chromas = 'self_wav' in self.model.condition_provider.conditioners and \
-                                            self.model.condition_provider.conditioners['self_wav'].has_eval_wavs()
-            if has_predefined_eval_chromas:
-                warn_once(self.logger, "Attempting to run cosine eval for config with pre-defined eval chromas! "
-                                        'Resetting eval chromas to None for evaluation.')
-                eval_chroma_wavs = self.model.condition_provider.conditioners.self_wav.eval_wavs  # type: ignore
-                self.model.condition_provider.conditioners.self_wav.reset_eval_wavs(None)  # type: ignore
             should_run_eval = True
 
         def get_compressed_audio(audio: torch.Tensor) -> torch.Tensor:
@@ -808,13 +795,11 @@ class MusicGenSolver(base.StandardSolver):
                     texts = [m.description for m in meta]
                     gt_tuned_text_consistency.update(y, texts, sizes, sample_rates)
 
-                # if chroma_cosine is not None:
-                #     if self.cfg.metrics.chroma_cosine.use_gt:
-                #         y_pred = get_compressed_audio(y).cpu()
-                #     chroma_cosine.update(y_pred, y, sizes, sample_rates)
-                #     # restore chroma conditioner's eval chroma wavs
-                #     if eval_chroma_wavs is not None:
-                #         self.model.condition_provider.conditioners['self_wav'].reset_eval_wavs(eval_chroma_wavs)
+                if self.cfg.evaluate.metrics.save_eval_gen:
+                    audio_write(
+                        self.samples_tests_dir / stem_name, pred_wav, sample_rate=32000,
+                        format="wav", strategy="peak"
+                    )
 
             flashy.distrib.barrier()
             if fad is not None:
@@ -843,9 +828,6 @@ class MusicGenSolver(base.StandardSolver):
 
             if gt_tuned_text_consistency is not None:
                 metrics['gt_tuned_text_consistency'] = gt_tuned_text_consistency.compute()
-
-            if chroma_cosine is not None:
-                metrics['chroma_cosine'] = chroma_cosine.compute()
 
             metrics = average(metrics)
             metrics = flashy.distrib.average_metrics(metrics, len(loader))

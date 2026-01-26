@@ -98,14 +98,8 @@ metrics:
       model_path: //reference/clap/tuned_epoch_15.pt
       model_arch: 'HTSAT-base'
       enable_fusion: false
-  chroma_cosine:
-    use_gt: false
-    model: chroma_base
-    chroma_base:
-      sample_rate: ${sample_rate}
-      n_chroma: 12
-      radix2_exp: 14
-      argmax: true
+  save_eval_gen:
+    path: eval_gen
 
 generate:
   every: 25
@@ -143,7 +137,7 @@ evaluate:
     gt_tuned_text_consistency: false
     genre_kld: false
     genre_class_metrics: false
-    chroma_cosine: false
+    save_eval_gen: false
 
 checkpoint:
   save_last: true

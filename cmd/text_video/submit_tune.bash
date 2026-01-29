@@ -6,8 +6,8 @@
 #SBATCH --qos=scientific-qos            # QoS 
 #SBATCH --nodes=1                       # Número de nós 1 de 1
 #SBATCH --ntasks=1                      # Número de tarefas
-#SBATCH --cpus-per-task=32               # CPUs por tarefa 8 de 128 (Max)
-#SBATCH --mem=256G                       # Memória RAM 32GB de 1007GB(Max)
+#SBATCH --cpus-per-task=16               # CPUs por tarefa 8 de 128 (Max)
+#SBATCH --mem=128G                       # Memória RAM 32GB de 1007GB(Max)
 #SBATCH --gres=gpu:2               # Solicitar 1 GPU de 4 (Max)
 #SBATCH --time=2-00:00:00               # Tempo máximo (2 dias)
 #SBATCH --output=job_%j.out        # Arquivo de saída (%j = job ID)
@@ -37,9 +37,6 @@ export USER=vivit_felipe # Will create an audiocraft_vivit_felipe folder inside 
 export PYTORCH_MPS_HIGH_WATERMARK_RATIO=0.0
 export OMP_NUM_THREADS=1
 
-export AUDIOCRAFT_TEAM=default
-export USER=vivit_felipe # Will create an audiocraft_felipe folder inside checkpoints
-
 dora -P audiocraft run -d \
     fsdp.use=false \
     autocast=true \
@@ -48,7 +45,7 @@ dora -P audiocraft run -d \
     continue_from=//pretrained/facebook/musicgen-medium \
     conditioner=video_text2music \
     dset=snes_mvdb \
-    dataset.num_workers=3 \
+    dataset.num_workers=2 \
     dataset.batch_size=6 \
     dataset.generate.num_samples=0 \
     dataset.valid.num_samples=500 \

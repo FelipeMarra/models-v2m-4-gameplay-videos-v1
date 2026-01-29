@@ -26,11 +26,11 @@ conditioners:
     model: t5
     t5:
       name: t5-base
-      finetune: true
+      finetune: false
       word_dropout: 0.3
       normalize_text: false
-      seq_len: 512 
-      output_tkns_dim: 512 # To alter the number of tokens 
+      seq_len: 256 
+      output_tkns_dim: 1024 # To alter the number of tokens 
   video:
     model: video
     video:
@@ -40,4 +40,4 @@ conditioners:
       num_hidden_layers: 12
       num_attention_heads: 12
       seq_len: 3137
-      output_tkns_dim: 512 # To alter the number of tokens
+      output_tkns_dim: 1024 # To alter the number of tokens

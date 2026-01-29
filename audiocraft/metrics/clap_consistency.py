@@ -45,7 +45,6 @@ class CLAPTextConsistencyMetric(TextConsistencyMetric):
     Model implementation & pre-trained checkpoints: https://github.com/LAION-AI/CLAP
     """
     def __init__(self, model_path: tp.Union[str, Path], model_arch: str = 'HTSAT-tiny', enable_fusion: bool = False):
-        print(f"metrics.clap_consistency.CLAPTextConsistencyMetric.__init__")
         super().__init__()
 
         if laion_clap is None:

@@ -212,3 +212,4 @@ egs/snes_mvdb
 egs/snes_mvdb-old
 *.out
 *.err
+*.checkpoints

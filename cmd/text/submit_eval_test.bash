@@ -1,13 +1,13 @@
 #!/bin/bash
-#SBATCH --job-name=eval_txt          # Nome do job
+#SBATCH --job-name=eval_txt_test          # Nome do job
 #SBATCH --mail-type=ALL                 # Opções: BEGIN, END, FAIL, ALL, etc.
-#SBATCH --mail-user=felipe.marra@ufv.br       # Endereço de e-mail destinatário
+#SBATCH --mail-user=felipeferreiramarra@gmail.com       # Endereço de e-mail destinatário
 #SBATCH --partition=scientific          # Partição
 #SBATCH --qos=scientific-qos            # QoS 
 #SBATCH --nodes=1                       # Número de nós 1 de 1
 #SBATCH --ntasks=1                      # Número de tarefas
 #SBATCH --cpus-per-task=8               # CPUs por tarefa 8 de 128 (Max)
-#SBATCH --mem=64G                       # Memória RAM 32GB de 1007GB(Max)
+#SBATCH --mem=256G                       # Memória RAM 32GB de 1007GB(Max)
 #SBATCH --gres=gpu:1               # Solicitar 1 GPU de 4 (Max)
 #SBATCH --time=2-00:00:00               # Tempo máximo (2 dias)
 #SBATCH --output=job_%j.out        # Arquivo de saída (%j = job ID)
@@ -44,12 +44,12 @@ dora -P audiocraft run \
     autocast=true \
     solver=musicgen/musicgen_base_32khz \
     model/lm/model_scale=medium \
-    continue_from=/home/es119256/dados/xps/audiocraft_felipe/xps/t5_musicgen_tuned_5e224a89 \
+    continue_from=/home/es119256/dados/xps/audiocraft_felipe/xps/d6698d5d_medium_random \
     conditioner=text2music \
     conditioners.description.t5.name=t5-base \
     conditioners.description.t5.finetune=true \
-    dset=snes_mvdb \
-    dataset.num_workers=8 \
+    dset=mock \
+    dataset.num_workers=4 \
     dataset.batch_size=32 \
     +dataset.evaluate.batch_size=32 \
     +metrics.fad.tf.batch_size=32 \

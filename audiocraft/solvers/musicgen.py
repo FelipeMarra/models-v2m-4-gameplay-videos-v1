@@ -28,7 +28,7 @@ from ..utils.cache import CachedBatchWriter, CachedBatchLoader
 from ..utils.samples.manager import SampleManager
 from ..utils.utils import get_dataset_from_loader, is_jsonable, model_hash
 
-from audiocraft.data.audio import audio_write
+from audiocraft.data.audio import audio_read, audio_write
 
 class MusicGenSolver(base.StandardSolver):
     """Solver for MusicGen training task.
@@ -726,9 +726,31 @@ class MusicGenSolver(base.StandardSolver):
             assert isinstance(dataset, AudioDataset)
             self.logger.info(f"Computing evaluation metrics on {len(dataset)} samples")
 
+            flashy.distrib.barrier()
+
+            xp_folder = dora.get_xp().folder # type: ignore
+            base_folder = os.path.join(xp_folder, 'eval_gen')
+            pred_folder = os.path.join(base_folder, 'pred')
+            csv_file = os.path.join(base_folder, 'pred_to_orig.csv')
+            self.logger.info(f"Predictions will be saved at {pred_folder}")
+
+            is_rank_zero = flashy.distrib.is_rank_zero()
+
+            if is_rank_zero and not os.path.exists(pred_folder):
+                os.makedirs(pred_folder)
+
+            if is_rank_zero:
+                head=f"y_pred_path,y_path,y_seek,json_path\n"
+                with open(csv_file, 'w') as f:
+                    f.write(head)
+
+            self.logger.info(f"Created new csv at {csv_file}")
+
+            flashy.distrib.barrier()
+
             for idx, batch in enumerate(lp):
                 audio, meta = batch
-                #print(f"\n-------------------> meta {idx}:\n{meta}\n")
+                # print(f"\n-------------------> meta {idx}:\n{meta}\n")
                 assert all([self.cfg.sample_rate == m.sample_rate for m in meta])
 
                 target_duration = audio.shape[-1] / self.cfg.sample_rate
@@ -795,23 +817,10 @@ class MusicGenSolver(base.StandardSolver):
                     gt_tuned_text_consistency.update(y, texts, sizes, sample_rates)
 
                 if self.cfg.evaluate.metrics.save_eval_gen:
-                    xp_folder = dora.get_xp().folder # type: ignore
-                    base_folder = os.path.join(xp_folder, 'eval_gen')
-                    pred_folder = os.path.join(base_folder, 'pred')
-
-                    if not os.path.exists(pred_folder):
-                        os.makedirs(pred_folder)
-
-                    csv_file = os.path.join(base_folder, 'pred_to_orig.csv')
-
                     rows = ''
-                    if not os.path.exists(csv_file):
-                        head=f"y_pred_path,y_path,y_seek,json_path\n"
-                        rows += head
-
                     for idx, m in enumerate(meta):
-                        audio_stem = Path(m.meta.path).stem + f"_{m.seek_time}"
-                        pred_file = os.path.join(pred_folder, audio_stem)
+                        json_stem = Path(m.meta.json_path).stem
+                        pred_file = os.path.join(pred_folder, json_stem)
 
                         audio_write(pred_file, y_pred[idx], sample_rate=32000)
 
@@ -821,8 +830,6 @@ class MusicGenSolver(base.StandardSolver):
                         f.write(rows)
 
             flashy.distrib.barrier()
-            if fad is not None:
-                metrics['fad'] = fad.compute()
 
             if kldiv is not None:
                 kld_metrics = kldiv.compute()
@@ -848,6 +855,225 @@ class MusicGenSolver(base.StandardSolver):
             if gt_tuned_text_consistency is not None:
                 metrics['gt_tuned_text_consistency'] = gt_tuned_text_consistency.compute()
 
+            if fad is not None:
+                metrics['fad'] = fad.compute()
+
+            metrics = average(metrics)
+            metrics = flashy.distrib.average_metrics(metrics, len(loader))
+
+        return metrics
+
+    def evaluate_audio_generation_w_continuation(self) -> dict:
+        """Evaluate audio generation with off-the-shelf metrics."""
+        evaluate_stage_name = f'{self.current_stage}_generation'
+
+        # instantiate evaluation metrics, if at least one metric is defined, run audio generation evaluation
+        fad: tp.Optional[eval_metrics.FrechetAudioDistanceMetric] = None
+        kldiv: tp.Optional[eval_metrics.KLDivergenceMetric] = None
+        genre_kldiv: tp.Optional[eval_metrics.GenreKLDivergenceMetric] = None
+        genre_class_metrics: tp.Optional[eval_metrics.PaSSTGenreClassificationMetric] = None
+        text_consistency: tp.Optional[eval_metrics.TextConsistencyMetric] = None
+        gt_text_consistency: tp.Optional[eval_metrics.TextConsistencyMetric] = None
+        tuned_text_consistency: tp.Optional[eval_metrics.TextConsistencyMetric] = None
+        gt_tuned_text_consistency: tp.Optional[eval_metrics.TextConsistencyMetric] = None
+        should_run_eval = False
+
+        if self.cfg.evaluate.metrics.fad:
+            fad = builders.get_fad(self.cfg.metrics.fad).to(self.device)
+            should_run_eval = True
+
+        if self.cfg.evaluate.metrics.kld:
+            kldiv = builders.get_kldiv(self.cfg.metrics.kld).to(self.device)
+            should_run_eval = True
+
+        if self.cfg.evaluate.metrics.genre_kld:
+            genre_kldiv = builders.get_genre_kldiv(self.cfg.metrics.genre_kld).to(self.device)
+            should_run_eval = True
+
+        if self.cfg.evaluate.metrics.genre_class_metrics:
+            genre_class_metrics = builders.get_genre_class_metrics(self.cfg.metrics.genre_class_metrics).to(self.device)
+            should_run_eval = True
+
+        if self.cfg.evaluate.metrics.text_consistency:
+            text_consistency = builders.get_text_consistency(self.cfg.metrics.text_consistency).to(self.device)
+            should_run_eval = True
+
+        if self.cfg.evaluate.metrics.gt_text_consistency:
+            gt_text_consistency = builders.get_text_consistency(self.cfg.metrics.text_consistency).to(self.device)
+            should_run_eval = True
+
+        if self.cfg.evaluate.metrics.tuned_text_consistency:
+            tuned_text_consistency = builders.get_text_consistency(self.cfg.metrics.tuned_text_consistency).to(self.device)
+            should_run_eval = True
+
+        if self.cfg.evaluate.metrics.gt_tuned_text_consistency:
+            gt_tuned_text_consistency = builders.get_text_consistency(self.cfg.metrics.tuned_text_consistency).to(self.device)
+            should_run_eval = True
+
+        def get_compressed_audio(audio: torch.Tensor) -> torch.Tensor:
+            audio_tokens, scale = self.compression_model.encode(audio.to(self.device))
+            compressed_audio = self.compression_model.decode(audio_tokens, scale)
+            return compressed_audio[..., :audio.shape[-1]]
+
+        metrics: dict = {}
+        if should_run_eval:
+            loader = self.dataloaders['evaluate']
+
+            updates = len(loader)
+            average = flashy.averager()
+
+            lp = self.log_progress(f'{evaluate_stage_name} inference', loader, total=updates, updates=self.log_updates)
+            dataset = get_dataset_from_loader(loader)
+
+            assert isinstance(dataset, AudioDataset)
+            self.logger.info(f"Computing evaluation metrics on {len(dataset)} samples")
+
+            flashy.distrib.barrier()
+
+            xp_folder = dora.get_xp().folder # type: ignore
+            base_folder = os.path.join(xp_folder, 'eval_gen')
+            pred_folder = os.path.join(base_folder, 'pred')
+            csv_file = os.path.join(base_folder, 'pred_to_orig.csv')
+            self.logger.info(f"Predictions will be saved at {pred_folder}")
+
+            is_rank_zero = flashy.distrib.is_rank_zero()
+
+            if is_rank_zero and not os.path.exists(pred_folder):
+                os.makedirs(pred_folder)
+
+            if is_rank_zero:
+                head=f"y_pred_path,y_path,y_seek,json_path\n"
+                with open(csv_file, 'w') as f:
+                    f.write(head)
+
+            self.logger.info(f"Created new csv {csv_file}")
+
+            flashy.distrib.barrier()
+
+            for idx, batch in enumerate(lp):
+                audio, meta = batch
+                #print(f"\n-------------------> meta {idx}:\n{meta}\n")
+                assert all([self.cfg.sample_rate == m.sample_rate for m in meta])
+
+                existent_meta = []
+                for idx, m in enumerate(meta):
+                    json_stem = Path(m.meta.json_path).stem
+                    pred_file = os.path.join(pred_folder, json_stem+'.wav')
+
+                    if os.path.exists(pred_file):
+                        existent_meta.append(pred_file)
+
+                if len(meta) > len(existent_meta):
+                    target_duration = audio.shape[-1] / self.cfg.sample_rate
+                    if self.cfg.evaluate.fixed_generation_duration:
+                        target_duration = self.cfg.evaluate.fixed_generation_duration
+
+                    gen_outputs = self.run_generate_step(
+                        batch, gen_duration=target_duration,
+                        remove_text_conditioning=self.cfg.evaluate.get('remove_text_conditioning', False)
+                    )
+                    y_pred = gen_outputs['gen_audio'].detach()
+                    y_pred = y_pred[..., :audio.shape[-1]]
+
+                    normalize_kwargs = dict(self.cfg.generate.audio)
+                    normalize_kwargs.pop('format', None)
+                    y_pred = torch.stack([normalize_audio(w, **normalize_kwargs) for w in y_pred], dim=0).cpu()
+                else:
+                    y_pred = torch.stack([audio_read(y_pred_path)[0] for y_pred_path in existent_meta], dim=0).cpu()
+
+                y = audio.cpu()  # should already be on CPU but just in case
+                # print(f"\nevaluate_audio W continuation: y_pred: {y_pred.shape} | y {y.shape}\n")
+
+                sizes = torch.tensor([m.n_frames for m in meta])  # actual sizes without padding
+                sample_rates = torch.tensor([m.sample_rate for m in meta])  # sample rates for audio samples
+                audio_stems = [Path(m.meta.path).stem + f"_{m.seek_time}" for m in meta]
+
+                if fad is not None:
+                    fad_y_pred = y_pred # another variable so that y_pred wont get altered for the next metrics
+                    if self.cfg.metrics.fad.use_gt:
+                        fad_y_pred = get_compressed_audio(y).cpu()
+                    jsons_paths = [m.meta.json_path for m in meta]
+                    fad.update(fad_y_pred, y, sizes, sample_rates, audio_stems, jsons_paths)
+
+                if kldiv is not None:
+                    kldiv_y_pred = y_pred
+                    if self.cfg.metrics.kld.use_gt:
+                        kldiv_y_pred = get_compressed_audio(y).cpu()
+                    kldiv.update(kldiv_y_pred, y, sizes, sample_rates)
+
+                if genre_kldiv is not None:
+                    genre_kldiv_y_pred = y_pred
+                    if self.cfg.metrics.genre_kld.use_gt:
+                        genre_kldiv_y_pred = get_compressed_audio(y).cpu()
+                    genre_kldiv.update(genre_kldiv_y_pred, y, sizes, sample_rates)
+
+                if genre_class_metrics is not None:
+                    genre_class_metrics_y_pred = y_pred
+
+                    if self.cfg.metrics.genre_class_metrics.use_gt:
+                        genre_class_metrics_y_pred = get_compressed_audio(y).cpu()
+
+                    jsons_paths = [m.meta.json_path for m in meta]
+                    genre_class_metrics.update(genre_class_metrics_y_pred, y, sizes, sample_rates, jsons_paths)
+
+                if text_consistency is not None:
+                    texts = [m.description for m in meta]
+                    text_consistency.update(y_pred, texts, sizes, sample_rates)
+
+                if gt_text_consistency is not None:
+                    texts = [m.description for m in meta]
+                    gt_text_consistency.update(y, texts, sizes, sample_rates)
+
+                if tuned_text_consistency is not None:
+                    texts = [m.description for m in meta]
+                    tuned_text_consistency.update(y_pred, texts, sizes, sample_rates)
+
+                if gt_tuned_text_consistency is not None:
+                    texts = [m.description for m in meta]
+                    gt_tuned_text_consistency.update(y, texts, sizes, sample_rates)
+
+                if self.cfg.evaluate.metrics.save_eval_gen:
+                    rows = ''
+                    for idx, m in enumerate(meta):
+                        json_stem = Path(m.meta.json_path).stem
+                        pred_file = os.path.join(pred_folder, json_stem)
+
+                        audio_write(pred_file, y_pred[idx], sample_rate=32000)
+
+                        rows += f"{pred_file},{m.meta.path},{m.seek_time},{m.meta.json_path}\n"
+
+                    with open(csv_file, 'a') as f:
+                        f.write(rows)
+
+            flashy.distrib.barrier()
+
+            if kldiv is not None:
+                kld_metrics = kldiv.compute()
+                metrics.update(kld_metrics)
+
+            if genre_kldiv is not None:
+                genre_kld_metrics = genre_kldiv.compute()
+                metrics.update(genre_kld_metrics)
+
+            if genre_class_metrics is not None:
+                genre_class_metrics_computed = genre_class_metrics.compute()
+                metrics.update(genre_class_metrics_computed)
+
+            if text_consistency is not None:
+                metrics['text_consistency'] = text_consistency.compute()
+
+            if gt_text_consistency is not None:
+                metrics['gt_text_consistency'] = gt_text_consistency.compute()
+
+            if tuned_text_consistency is not None:
+                metrics['tuned_text_consistency'] = tuned_text_consistency.compute()
+
+            if gt_tuned_text_consistency is not None:
+                metrics['gt_tuned_text_consistency'] = gt_tuned_text_consistency.compute()
+
+            if fad is not None:
+                metrics['fad'] = fad.compute()
+
             metrics = average(metrics)
             metrics = flashy.distrib.average_metrics(metrics, len(loader))
 
@@ -863,6 +1089,10 @@ class MusicGenSolver(base.StandardSolver):
                 #print("self.cfg.evaluate.metrics.base") -> Won't get executed
                 metrics.update(self.common_train_valid('evaluate'))
 
-            gen_metrics = self.evaluate_audio_generation()
+            if self.cfg.evaluate.with_continaution:
+                self.logger.info(f"Evaluate will be run with continuation")
+                gen_metrics = self.evaluate_audio_generation_w_continuation()
+            else:
+                gen_metrics = self.evaluate_audio_generation()
 
             return {**metrics, **gen_metrics}

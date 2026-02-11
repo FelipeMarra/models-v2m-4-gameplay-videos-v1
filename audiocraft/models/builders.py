@@ -27,7 +27,8 @@ from ..modules.conditioners import (BaseConditioner,
                                     ConditionFuser,
                                     ConditioningProvider,
                                     T5Conditioner, 
-                                    ViViTConditioner)
+                                    ViViTConditioner,
+                                    ViViTConditioner4T5)
 from ..utils.utils import dict_from_config
 from .encodec import (CompressionModel, EncodecModel,
                       InterleaveStereoCompressionModel)
@@ -98,7 +99,7 @@ def get_lm_model(cfg: omegaconf.DictConfig) -> LMModel:
         )
         fuser = get_condition_fuser(cfg)
         condition_provider = get_conditioner_provider(kwargs["dim"], cfg).to(cfg.device)
-        if len(fuser.fuse2cond["cross"]) or len(fuser.fuse2cond["cross_sum"]) > 0:  # enforce cross-att programmatically
+        if len(fuser.fuse2cond["cross"]) > 0 or len(fuser.fuse2cond["cross_sum"]) > 0 or len(fuser.fuse2cond["cat_att_cross"]) > 0:  # enforce cross-att programmatically
             kwargs["cross_attention"] = True
         if codebooks_pattern_cfg.modeling is None:
             assert (
@@ -151,6 +152,12 @@ def get_conditioner_provider(
                 device=device,
                 **model_args
             )
+        elif model_type == 'video_4_text':
+            conditioners[str(cond)] = ViViTConditioner4T5(
+                output_dim=output_dim,
+                device=device,
+                **model_args
+            )
         else:
             raise ValueError(f"Unrecognized conditioning model: {model_type}")
     
@@ -164,7 +171,7 @@ def get_conditioner_provider(
 def get_condition_fuser(cfg: omegaconf.DictConfig) -> ConditionFuser:
     """Instantiate a condition fuser object."""
     fuser_cfg = getattr(cfg, "fuser")
-    fuser_methods = ["sum", "cross", "cross_sum","prepend", "ignore", "input_interpolate"]
+    fuser_methods = ["sum", "cross", "cross_sum","cat_att_cross","prepend", "ignore", "input_interpolate"]
     fuse2cond = {k: fuser_cfg[k] for k in fuser_methods if k in fuser_cfg}
     kwargs = {k: v for k, v in fuser_cfg.items() if k not in fuser_methods}
     fuser = ConditionFuser(fuse2cond=fuse2cond, **kwargs)

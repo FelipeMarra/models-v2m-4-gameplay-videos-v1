@@ -17,7 +17,8 @@ fuser:
   cross_attention_pos_emb_scale: 1
   sum: []
   prepend: []
-  cross_sum: [description, video] # Sum both and send to cross att
+  cross_sum: [] # Sum both and send to cross att
+  cat_att_cross: [description, video] # Cat, perform self-att between cated conditioners, send to cross att
   cross: []
   input_interpolate: []
 
@@ -29,15 +30,12 @@ conditioners:
       finetune: false
       word_dropout: 0.3
       normalize_text: false
-      seq_len: 256 
-      output_tkns_dim: 1024 # To alter the number of tokens 
   video:
-    model: video
-    video:
+    model: video_4_text
+    video_4_text:
       name: google/vivit-b-16x2-kinetics400
       video_len: 32
       finetune: true
       num_hidden_layers: 12
       num_attention_heads: 12
-      seq_len: 3137
-      output_tkns_dim: 1024 # To alter the number of tokens
+      kernel_size: 2

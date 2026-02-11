@@ -125,7 +125,7 @@ generate:
 evaluate:
   every: 25
   num_workers: 5
-  with_continaution: true
+  with_continaution: false
   metrics:
     base: false
     fad: false

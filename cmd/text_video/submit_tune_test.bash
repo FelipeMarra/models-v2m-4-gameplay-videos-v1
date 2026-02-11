@@ -33,7 +33,7 @@ echo "Iniciado em: $(date)"
 
 # Variáveis de ambiente PyTorch
 export AUDIOCRAFT_TEAM=default
-export USER=vivit_felipe # Will create an audiocraft_vivit_felipe folder inside checkpoints
+export USER=vivit_t5_felipe # Will create an audiocraft_vivit_felipe folder inside checkpoints
 export PYTORCH_MPS_HIGH_WATERMARK_RATIO=0.0
 export OMP_NUM_THREADS=1
 
@@ -46,13 +46,13 @@ dora -P audiocraft run -d \
     conditioner=video_text2music \
     dset=snes_mvdb \
     dataset.num_workers=1 \
-    dataset.batch_size=2 \
+    dataset.batch_size=3 \
     dataset.generate.num_samples=1 \
     dataset.valid.num_samples=1 \
     schedule.cosine.warmup=1 \
     optim.optimizer=adamw \
     optim.lr=1e-4 \
-    optim.epochs=6 \
+    optim.epochs=2 \
     optim.updates_per_epoch=2 \
     optim.adam.weight_decay=0.01 \
     optim.ema.use=false \

@@ -294,28 +294,13 @@ class BaseConditioner(nn.Module):
         dim (int): Hidden dim of the model.
         output_dim (int): Output dim of the conditioner.
     """
-    def __init__(self, dim: int, output_dim: int, output_tkns_dim:int=-1, seq_len: int=-1):
+    def __init__(self, dim: int, output_dim: int):
         super().__init__()
         self.dim = dim
         self.output_dim = output_dim
-        self.output_tkns_dim = output_tkns_dim
-        self.seq_len = seq_len
-        self.output_tkns_proj = None
 
         if self.output_dim > -1:  # omit projection when output_dim <= 0
             self.output_proj = nn.Linear(self.dim, self.output_dim)
-
-        if self.output_tkns_dim > -1 and self.seq_len > -1:  # omit projection when output_dim <= 0
-            self.output_tkns_proj = nn.Linear(self.seq_len, self.output_tkns_dim)
-
-    def apply_output_tkns_proj(self, x:torch.Tensor, name="") -> torch.Tensor:
-        if self.output_tkns_proj:
-            # Put Seq_len in the last dim, apply layer to change num of tokens and reshape back
-            x = x.permute(0, 2, 1) # B, S, O (batch, seq_len, out_dim) -> B, O, S
-            x = self.output_tkns_proj(x)
-            x = x.permute(0, 2, 1) # B, O, S -> B, S, O
-
-        return x
 
     def tokenize(self, *args, **kwargs) -> tp.Any:
         """Should be any part of the processing that will lead to a synchronization
@@ -431,10 +416,10 @@ class T5Conditioner(TextConditioner):
 
     def __init__(self, name: str, output_dim: int, finetune: bool, device: str,
                  autocast_dtype: tp.Optional[str] = 'float32', word_dropout: float = 0.,
-                 normalize_text: bool = False, output_tkns_dim:int=-1, seq_len: int=-1):
+                 normalize_text: bool = False):
         assert name in self.MODELS, f"Unrecognized t5 model name (should in {self.MODELS})"
 
-        super().__init__(self.MODELS_DIMS[name], output_dim, output_tkns_dim=output_tkns_dim, seq_len=seq_len)
+        super().__init__(self.MODELS_DIMS[name], output_dim)
         self.device = device
         self.name = name
         self.finetune = finetune
@@ -489,20 +474,11 @@ class T5Conditioner(TextConditioner):
 
         empty_idx = torch.LongTensor([i for i, xi in enumerate(entries) if xi == ""])
 
-        if self.seq_len > -1:
-            inputs = self.t5_tokenizer(
-                entries, 
-                return_tensors='pt', 
-                padding='max_length', 
-                truncation=True, 
-                max_length=self.seq_len
-            ).to(self.device)
-        else:
-            inputs = self.t5_tokenizer(
-                entries, 
-                return_tensors='pt', 
-                padding='max_length'
-            ).to(self.device)
+        inputs = self.t5_tokenizer(
+            entries, 
+            return_tensors='pt', 
+            padding='max_length'
+        ).to(self.device)
 
         mask = inputs['attention_mask']
         mask[empty_idx, :] = 0  # type: ignore # zero-out index where the input is non-existant
@@ -516,11 +492,7 @@ class T5Conditioner(TextConditioner):
         embeds = self.output_proj(embeds.to(self.output_proj.weight))
 
         # print(f"\n T5 mask shape: {mask.shape} \n")
-        if self.output_tkns_proj:
-            mask = torch.ones_like(mask)
         embeds = (embeds * mask.unsqueeze(-1))
-        
-        embeds = self.apply_output_tkns_proj(embeds, name=self.name)
 
         return embeds, mask
 
@@ -556,11 +528,10 @@ class ViViTConditioner(VideoConditioner):
 
     def __init__(self, name: str, output_dim: int, finetune:bool, device:str, 
                 autocast_dtype: tp.Optional[str] = 'float32', video_len:int=32, 
-                num_hidden_layers:int=12, num_attention_heads:int=12, 
-                output_tkns_dim:int=-1, seq_len: int=-1):
+                num_hidden_layers:int=12, num_attention_heads:int=12):
         assert name in self.MODELS, f"Unrecognized ViViT model name (should in {self.MODELS})"
 
-        super().__init__(self.MODELS_DIMS[name], output_dim, output_tkns_dim=output_tkns_dim, seq_len=seq_len)
+        super().__init__(self.MODELS_DIMS[name], output_dim)
 
         self.device = device
         self.name = name
@@ -738,11 +709,223 @@ class ViViTConditioner(VideoConditioner):
         embeds = self.output_proj(embeds)
 
         # print(f"\n ViViT mask shape: {mask.shape} \n")
-        if self.output_tkns_proj:
-            mask = torch.ones_like(mask)
         embeds = (embeds * mask.unsqueeze(-1).to(self.device))
 
-        embeds = self.apply_output_tkns_proj(embeds, name=self.name)
+        return embeds, mask
+
+class ViViTConditioner4T5(VideoConditioner):
+    """
+        ViViT-based Video Conditioner
+    """
+
+    MODELS = ["google/vivit-b-16x2-kinetics400"]
+    MODELS_DIMS = {
+        "google/vivit-b-16x2-kinetics400": 768,
+    }
+
+    def __init__(self, name: str, output_dim: int, finetune:bool, device:str, 
+                autocast_dtype: tp.Optional[str] = 'float32', video_len:int=32, 
+                num_hidden_layers:int=12, num_attention_heads:int=12, kernel_size=2):
+        assert name in self.MODELS, f"Unrecognized ViViT model name (should in {self.MODELS})"
+
+        super().__init__(self.MODELS_DIMS[name], output_dim)
+
+        self.device = device
+        self.name = name
+        self.finetune = finetune
+        self.video_len = video_len
+
+        if autocast_dtype is None or self.device == 'cpu':
+            self.autocast = TorchAutocast(enabled=False)
+            if self.device != 'cpu':
+                logger.warning("ViViT has no autocast, this might lead to NaN")
+        else:
+            dtype = getattr(torch, autocast_dtype)
+            assert isinstance(dtype, torch.dtype)
+            logger.info(f"ViViT will be evaluated with autocast as {autocast_dtype}")
+            self.autocast = TorchAutocast(enabled=True, device_type=self.device, dtype=dtype)
+
+        self.image_processor = SNESViViTImageProcessor(normalize=True)
+
+        vivit_config = VivitModel.config_class.from_pretrained(name)
+        # print(f"ViViT CONFIG INSIDE VIVIT CONDITIONER\n{vivit_config}")
+
+        vivit_config.update(
+            {
+                "num_hidden_layers": num_hidden_layers,
+                "num_attention_heads": num_attention_heads
+            }
+        )
+        # print(f"ViViT CONFIG INSIDE VIVIT CONDITIONER MODIFIED\n{vivit_config}")
+
+        self.vivit = VivitModel.from_pretrained(name, config=vivit_config).train(mode=finetune) # type: ignore
+        #vivit = VivitModel.from_pretrained(name).train(mode=finetune) # type: ignore
+
+        self.compress_conv1 = nn.Conv1d(
+            in_channels=self.MODELS_DIMS[name], 
+            out_channels=self.MODELS_DIMS[name], 
+            kernel_size=kernel_size,
+            stride=kernel_size
+        )
+
+        self.compress_conv2 = nn.Conv1d(
+            in_channels=self.MODELS_DIMS[name], 
+            out_channels=self.MODELS_DIMS[name], 
+            kernel_size=kernel_size,
+            stride=kernel_size
+        )
+
+    def read_video_pyav(self, container, indices):
+        '''
+        Decode the video with PyAV decoder.
+        Args:
+            container (`av.container.input.InputContainer`): PyAV container.
+            indices (`list[int]`): List of frame indices to decode.
+        Returns:
+            result (torch.Tensor):tensor of decoded frames of shape (num_frames, 3, height, width).
+        '''
+        frames = []
+        container.seek(0)
+        start_index = indices[0]
+        end_index = indices[-1]
+        for i, frame in enumerate(container.decode(video=0)):
+            if i > end_index:
+                break
+            if i >= start_index and i in indices:
+                frames.append(frame)
+        video = torch.stack([torch.from_numpy(x.to_ndarray(format="rgb24")) for x in frames])
+        video = video.permute(0, 3, 1, 2)
+        return video
+
+    def write_video(self, file_name, frame_rate, video_tensor):
+        """
+            For debugging
+        """
+        # Def not sufficient to bring the image back to the original pixel values
+        # after the ImageProcessor stuff, but enough to get an ideia if it is working
+        video_tensor = video_tensor.permute(0, 2, 3, 1)
+        torchvision.io.write_video(f'{file_name}.mp4', video_tensor, frame_rate)
+
+    def sample_frame_indices_random_fr(self, video_path, clip_len, seg_len):
+        '''
+        Sample a given number of frame indices from the video.
+        We set a window of a random size and position and sample frames linearly spaced.
+        The window size is set so that the stride is at leat 2, that is, we sample
+        at least every 2 frames. 
+        Since our videos have 300 frames and ViViT asks for 32, we can sample at most
+        every 9 frames.
+        Args:
+            clip_len (`int`): Total number of frames to sample.
+            seg_len (`int`): Maximum allowed index of sample's last frame.
+        Returns:
+            indices (`list[int]`): List of sampled frame indices
+        '''
+        max_fr = np.ceil(seg_len/clip_len) # amout of frames vary a bit
+        min_fr = 2
+
+        try:
+            frame_sample_rate = np.random.randint(min_fr, max_fr) # rand between 2 and 9 (for 300 frames)
+        except:
+            logger.error(f"Video {video_path} has len of only {seg_len} and should be removed from the dataset")
+            frame_sample_rate=1
+
+        converted_len = int(clip_len * frame_sample_rate) # 32 * 2-9 -> 64-288
+        end_idx = np.random.randint(converted_len, seg_len) # end at rand between 64-288 and 299
+        # start from rand end - 64
+        start_idx = end_idx - converted_len
+        # start from rand end minus 64-288 until rand end -> 
+        # range from 0 to 299 lin spaced -> step frame_sample_rate
+        indices = np.linspace(start_idx, end_idx, num=clip_len)
+        indices = np.clip(indices, start_idx, end_idx - 1).astype(np.int64)
+        window_duration = (end_idx-start_idx)/30
+        return indices, window_duration
+
+    def sample_frame_indices(self, video_path, clip_len, frame_sample_rate, seg_len):
+        '''
+        Sample a given number of frame indices from the video.
+        Args:
+            clip_len (`int`): Total number of frames to sample.
+            frame_sample_rate (`int`): Sample every n-th frame.
+            seg_len (`int`): Maximum allowed index of sample's last frame.
+        Returns:
+            indices (`list[int]`): List of sampled frame indices
+        '''
+        try:
+            converted_len = int(clip_len * frame_sample_rate)
+            end_idx = np.random.randint(converted_len, seg_len) # rand between 64 and 300 (for videos with 300 frames)
+        except:
+            logger.error(f"Video {video_path} has len of only {seg_len} and should be removed from the dataset")
+            converted_len = clip_len
+            end_idx = np.random.randint(converted_len, seg_len) # rand between 32 and ??? (for videos with less than 64 frames, that should be remove from the dataset)
+
+        start_idx = end_idx - converted_len
+        indices = np.linspace(start_idx, end_idx, num=clip_len)
+        indices = np.clip(indices, start_idx, end_idx - 1).astype(np.int64)
+        return indices
+
+    def tokenize(self, x: tp.List[tp.Optional[str]]) -> tp.Dict[str, tp.List[tp.Any]]:
+        # video_len: video total seconds
+        # if current sample doesn't have a certain attribute, replace with empty string
+        entries: tp.List[str] = [xi if xi is not None else "" for xi in x]
+        videos:tp.Dict[str, tp.Any] = {"video": [], "attention_mask": []}
+        for v in entries:
+            if v != "":
+                if isinstance(v, str):
+                    container = av.open(v)
+                    #indices, window_duration = self.sample_frame_indices(v, clip_len=32, seg_len=container.streams.video[0].frames)
+                    indices = self.sample_frame_indices(video_path=v, clip_len=32, frame_sample_rate=2, seg_len=container.streams.video[0].frames)
+                    video = self.read_video_pyav(container=container, indices=indices)
+                    video = self.image_processor(video)
+
+                    # Save video to test augs
+                    # file_name = v.split('.')[0].split('/')[-1]
+                    # frame_rate = 32 #self.video_len/(window_duration)
+                    # self.write_video(file_name, frame_rate, video.squeeze())
+
+                    video = video.to(self.device).unsqueeze(0)
+                else:
+                    video = v.to(self.device)
+
+                videos["video"].append(video)
+                videos['attention_mask'].append(1)
+            else:
+                video = torch.zeros(1, self.video_len, 3, 224, 224).to(self.device)
+
+                videos["video"].append(video)
+                videos['attention_mask'].append(0)
+
+        return videos
+
+    def forward(self, inputs: tp.Dict[str, torch.Tensor]) -> ConditionType:
+        mask = inputs['attention_mask']
+        videos = inputs['video']
+        videos = torch.cat(videos, 0).float() # type: ignore
+        # print(f"videos: {videos.shape}")
+
+        with self.autocast:
+            outputs = self.vivit(videos)
+            cls_token = outputs.last_hidden_state[:,0,:].unsqueeze(1)
+            patch_tokens = outputs.last_hidden_state[:,1:,:]
+
+            patch_tokens = patch_tokens.permute(0,2, 1)
+
+            patch_tokens = self.compress_conv1(patch_tokens)
+            patch_tokens = self.compress_conv1(patch_tokens)
+
+            patch_tokens = patch_tokens.permute(0,2, 1)
+
+            embeds = torch.cat([cls_token, patch_tokens], dim=1)
+
+        empty_idx = torch.LongTensor([i for i, xi in enumerate(mask) if xi == 0])
+        mask = torch.ones(embeds.shape[0], embeds.shape[1])
+        mask[empty_idx, :] = 0
+
+        embeds = embeds.to(self.output_proj.weight)
+        embeds = self.output_proj(embeds)
+        # print(f"FINAL ViViT embeds shape: {embeds.shape}")
+
+        # print(f"\n ViViT mask shape: {mask.shape} \n")
+        embeds = (embeds * mask.unsqueeze(-1).to(self.device))
 
         return embeds, mask
 
@@ -1103,7 +1286,10 @@ class ConditioningProvider(nn.Module):
             f"got {text.keys(), wavs.keys(), joint_embeds.keys()}"
         )
 
-        for attribute, batch in chain(text.items(), video.items(), wavs.items(), joint_embeds.items()):
+        # Video comes first because I know that it allways outputs same amount o tokens
+        # Not so sure about that for text model, although I know amout of tokens for Roberta are always 77 (from a pre-process step)
+        # For video+text audio, the model will learn that the first T tokens are always video
+        for attribute, batch in chain(video.items(), text.items(), wavs.items(), joint_embeds.items()):
             output[attribute] = self.conditioners[attribute].tokenize(batch)
         return output
 
@@ -1302,7 +1488,7 @@ class ConditionFuser(StreamingModule):
         cross_attention_pos_emb (bool, optional): Use positional embeddings in cross attention.
         cross_attention_pos_emb_scale (int): Scale for positional embeddings in cross attention if used.
     """
-    FUSING_METHODS = ["sum", "prepend", "cross", "cross_sum", "ignore", "input_interpolate"]
+    FUSING_METHODS = ["sum", "prepend", "cross", "cross_sum", "cat_att_cross", "ignore", "input_interpolate"]
 
     def __init__(self, fuse2cond: tp.Dict[str, tp.List[str]], cross_attention_pos_emb: bool = False,
                  cross_attention_pos_emb_scale: float = 1.0):
@@ -1314,9 +1500,22 @@ class ConditionFuser(StreamingModule):
         self.cross_attention_pos_emb_scale = cross_attention_pos_emb_scale
         self.fuse2cond: tp.Dict[str, tp.List[str]] = fuse2cond
         self.cond2fuse: tp.Dict[str, str] = {}
+
+        self.is_cond_self_att = False
         for fuse_method, conditions in fuse2cond.items():
             for condition in conditions:
+                if fuse_method == 'cat_att_cross':
+                    self.is_cond_self_att = True
                 self.cond2fuse[condition] = fuse_method
+
+        if self.is_cond_self_att:
+            encoder_layer = nn.TransformerEncoderLayer(
+                d_model=1536,
+                nhead=12,
+                batch_first=True
+            )
+
+            self.cond_self_att = nn.TransformerEncoder(encoder_layer, num_layers=4)
 
     def forward(
         self,
@@ -1358,7 +1557,7 @@ class ConditionFuser(StreamingModule):
             elif op == 'prepend':
                 if first_step:
                     input = torch.cat([cond, input], dim=1)
-            elif op == 'cross':
+            elif op == 'cross' or op == 'cat_att_cross':
                 if cross_attention_output is not None:
                     cross_attention_output = torch.cat([cross_attention_output, cond], dim=1)
                 else:
@@ -1380,6 +1579,10 @@ class ConditionFuser(StreamingModule):
             ).view(1, -1, 1)
             pos_emb = create_sin_embedding(positions, cross_attention_output.shape[-1])
             cross_attention_output = cross_attention_output + self.cross_attention_pos_emb_scale * pos_emb
+
+        if self.is_cond_self_att:
+            cross_attention_output = self.cond_self_att(cross_attention_output)
+            # print(f"\nCondition FINAL cross_attention_output: {cross_attention_output.shape}")
 
         if self._is_streaming:
             self._streaming_state['offsets'] = offsets + T

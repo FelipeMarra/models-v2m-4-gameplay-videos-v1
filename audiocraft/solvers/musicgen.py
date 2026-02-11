@@ -456,7 +456,7 @@ class MusicGenSolver(base.StandardSolver):
                 scale = self.scaler.get_scale()
                 metrics['grad_scale'] = scale
 
-            if not loss.isfinite().all():
+            if not loss.isfinite().all(): # type: ignore
                 raise RuntimeError("Model probably diverged.")
 
         metrics['ce'] = ce
@@ -581,7 +581,7 @@ class MusicGenSolver(base.StandardSolver):
             return hydrated_conditions
 
         metrics: dict = {}
-        average = flashy.averager()
+        average = flashy.averager() # type: ignore
         for batch in lp:
             audio, meta = batch
             # metadata for sample manager
@@ -711,14 +711,14 @@ class MusicGenSolver(base.StandardSolver):
         def get_compressed_audio(audio: torch.Tensor) -> torch.Tensor:
             audio_tokens, scale = self.compression_model.encode(audio.to(self.device))
             compressed_audio = self.compression_model.decode(audio_tokens, scale)
-            return compressed_audio[..., :audio.shape[-1]]
+            return compressed_audio[..., :audio.shape[-1]] # type: ignore
 
         metrics: dict = {}
         if should_run_eval:
             loader = self.dataloaders['evaluate']
 
             updates = len(loader)
-            average = flashy.averager()
+            average = flashy.averager() # type: ignore
 
             lp = self.log_progress(f'{evaluate_stage_name} inference', loader, total=updates, updates=self.log_updates)
             dataset = get_dataset_from_loader(loader)
@@ -829,6 +829,8 @@ class MusicGenSolver(base.StandardSolver):
                     with open(csv_file, 'a') as f:
                         f.write(rows)
 
+                    flashy.distrib.barrier()
+
             flashy.distrib.barrier()
 
             if kldiv is not None:
@@ -913,14 +915,14 @@ class MusicGenSolver(base.StandardSolver):
         def get_compressed_audio(audio: torch.Tensor) -> torch.Tensor:
             audio_tokens, scale = self.compression_model.encode(audio.to(self.device))
             compressed_audio = self.compression_model.decode(audio_tokens, scale)
-            return compressed_audio[..., :audio.shape[-1]]
+            return compressed_audio[..., :audio.shape[-1]] # type: ignore
 
         metrics: dict = {}
         if should_run_eval:
             loader = self.dataloaders['evaluate']
 
             updates = len(loader)
-            average = flashy.averager()
+            average = flashy.averager() # type: ignore
 
             lp = self.log_progress(f'{evaluate_stage_name} inference', loader, total=updates, updates=self.log_updates)
             dataset = get_dataset_from_loader(loader)
@@ -1044,6 +1046,8 @@ class MusicGenSolver(base.StandardSolver):
 
                     with open(csv_file, 'a') as f:
                         f.write(rows)
+
+                    flashy.distrib.barrier()
 
             flashy.distrib.barrier()
 

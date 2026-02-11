@@ -154,7 +154,7 @@ def main():
     parser.add_argument('--genres_path', type=str, default="/home/es119256/dados/datasets/vmdb_3/deepseek_genres.csv", help="path to games genres csv")
     parser.add_argument('--split', type=str, default="test", help="split to be accessed in dataset/snes_mvdb/SPLIT")
     parser.add_argument('--converted_dataset', type=str, default="/home/es119256/dados/repos/visual-bardo-video/dataset", help="path to audiocraft/dataset. snes_mvdb will be added to access the converted dataset")
-    parser.add_argument('--model_sig', type=str, default="t5_vivit_musicgen_tuned_wO_t5_865e739b", help="path to checkpoint")
+    parser.add_argument('--model_sig', type=str, default="t5_vivit_musicgen_tuned_wO_t5_78bf6732", help="path to checkpoint")
     parser.add_argument('--is_vanilla', type=bool, default=False, help="If True model_checkpoint will be facebook/musicgen-medium")
 
     args = parser.parse_args()

@@ -84,7 +84,7 @@ class GenreClassificationMetrics(torchmetrics.Metric):
         raise NotImplementedError("implement method to extract label distributions from the model.")
 
     def update(self, preds: torch.Tensor, targets: torch.Tensor,
-                sizes: torch.Tensor, sample_rates: torch.Tensor, jsons_paths:str) -> None:
+                sizes: torch.Tensor, sample_rates: torch.Tensor, jsons_paths:list[str]) -> None:
         """Calculates running KL-Divergence loss between batches of audio
         preds (generated) and target (ground-truth)
         Args:

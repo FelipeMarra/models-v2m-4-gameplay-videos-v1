@@ -7,7 +7,7 @@
 #SBATCH --nodes=1                       # Número de nós 1 de 1
 #SBATCH --ntasks=1                      # Número de tarefas
 #SBATCH --cpus-per-task=8               # CPUs por tarefa 8 de 128 (Max)
-#SBATCH --mem=64G                       # Memória RAM 32GB de 1007GB(Max)
+#SBATCH --mem=32G                       # Memória RAM 32GB de 1007GB(Max)
 #SBATCH --gres=gpu:1               # Solicitar 1 GPU de 4 (Max)
 #SBATCH --time=2-00:00:00               # Tempo máximo (2 dias)
 #SBATCH --output=job_%j.out        # Arquivo de saída (%j = job ID)
@@ -35,11 +35,13 @@ echo "Iniciado em: $(date)"
 export AUDIOCRAFT_TEAM=default
 export USER=felipe # Will create an audiocraft_felipe folder inside checkpoints
 
-python3 -u /home/es119256/dados/repos/visual-bardo-video-2/audiocraft/metrics/img_bind_consistency.py \
-    --eval_path /home/es119256/dados/xps/audiocraft_felipe/xps/c78c10cf \
-    --dataset_path /home/es119256/dados/datasets/vmdb/nintendo-snes-spc
+XP=3b1011b0
 
-# job 2212 eh do 29d1ea31
+echo "Running ImageBind Score on ViViT->MusicGen XP ${XP}"
+
+python3 -u /home/es119256/dados/repos/visual-bardo-video/audiocraft/metrics/img_bind_consistency.py \
+    --eval_path /home/es119256/dados/xps/audiocraft_vivit_t5_felipe/xps/${XP} \
+    --dataset_path /home/es119256/dados/datasets/vmdb/nintendo-snes-spc
 
 echo "Memória final: $(free -h | grep Mem:)"
 echo "Finalizado em: $(date)"

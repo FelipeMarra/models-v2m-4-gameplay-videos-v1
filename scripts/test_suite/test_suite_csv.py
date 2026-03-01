@@ -1,7 +1,3 @@
-########################################################################################
-# To get a CSV file with the paths to the videos that are being used in the test suite
-########################################################################################
-
 import os
 import json
 import argparse
@@ -22,13 +18,21 @@ def get_genre(genres_df, game):
 
     return genre
 
-def read_dataset_split(dataset_split_path:str, genres_path:str) -> list[dict[str, str]]:
+def read_dataset_split(dataset_split_path:str, genres_path:str) -> dict[str, dict[str, dict[str, list[dict]]]]:
     """
         Returns:
             list of dicts containing relevant information about the samples, like the video path, the audio path and the description
     """
     dataset_split_path = os.path.abspath(dataset_split_path)
-    samples_dicts:list[dict[str, str]] = []
+    # samples_dicts structure
+    # {
+    #     genre_1: {
+    #         game_1: {
+    #             audio_1: [game_1_audio_1_content_1, game_1_audio_1_content_2...]
+    #         }
+    #     }
+    # }
+    samples_dicts:dict[str, dict[str, dict[str, list[dict]]]] = {}
     genres_df = pd.read_csv(genres_path)
 
     for file in sorted(os.listdir(dataset_split_path)):
@@ -36,57 +40,56 @@ def read_dataset_split(dataset_split_path:str, genres_path:str) -> list[dict[str
             continue
 
         json_path = os.path.join(dataset_split_path, file)
-        json_dict:dict[str, str] = {}
+        game_content:dict[str, str] = {}
         with open(json_path, 'r') as f:
             general_json_dict = json.load(f)
 
-            json_dict['game'] = general_json_dict['name'].split('_')[0]
-            json_dict['genre'] = get_genre(genres_df, json_dict['game'])
-            json_dict['video'] = general_json_dict['video'].split('nintendo-snes-spc/')[-1]
-            json_dict['audio'] = general_json_dict['name']
-            json_dict['description'] = general_json_dict['description']
+            game = general_json_dict['name'].split('_')[0]
+            genre = get_genre(genres_df, game)
+            audio = general_json_dict['name']
 
-        samples_dicts.append(json_dict)
+            game_content['video'] = general_json_dict['video']
+            game_content['description'] = general_json_dict['description']
+
+        if not samples_dicts.get(genre):
+            samples_dicts[genre] = {}
+        if not samples_dicts[genre].get(game):
+            samples_dicts[genre][game] = {}
+        if not samples_dicts[genre][game].get(audio):
+            samples_dicts[genre][game][audio] = []
+
+
+        samples_dicts[genre][game][audio].append(game_content)
 
     return samples_dicts
 
-def get_one_sample_per_game(samples_dicts:list[dict[str, str]]) -> dict[str, list[str]]:
-    # dumb dict in order to process the last game in the samples_dicts list
-    none_dict = {'game': "NONE"}
-    samples_dicts.append(none_dict)
+def get_n_samples_per_game(samples_dicts:dict[str, dict[str, dict[str, list[dict]]]], n:int) -> list[dict[str, str]]:
+    choosen_samples:list[dict[str, str]] = []
 
-    choosen_samples:dict[str, list[str]] = {
-        'game': [],
-        'genre': [],
-        'video': [],
-        'audio': [],
-        'description': []
-    }
+    for genre_name, genre_games in samples_dicts.items():
+        for game_name, game_audios in genre_games.items():
+            choosen_audios = game_audios
 
-    current_game = ''
-    game_dicts = []
+            # Make sure to get at most 3 different soundtracks
+            if len(game_audios.keys()) > n:
+                choosen_audios = {}
+                chosen_audios_keys = random.choices(list(game_audios.keys()), k=n)
+                for key in chosen_audios_keys:
+                    choosen_audios[key] = game_audios[key]
 
-    for sample_dict in samples_dicts:
-        game = sample_dict['game']
+            for audio_name, audio_content in choosen_audios.items():
+                # Get random video for current soundtrack
+                choosen_audio_content = random.choice(audio_content)
 
-        if current_game == '':
-            current_game = game
+                choosen_sample = {
+                    'game': game_name,
+                    'genre': genre_name,
+                    'video': choosen_audio_content['video'].split('nintendo-snes-spc/')[-1],
+                    'audio': audio_name,
+                    'description': choosen_audio_content['description']
+                }
 
-        if game == current_game:
-            game_dicts.append(sample_dict)
-        else:
-            choosen_sample = random.choice(game_dicts)
-
-            choosen_samples['game'].append(choosen_sample['game'])
-            choosen_samples['genre'].append(choosen_sample['genre'])
-            choosen_samples['video'].append(choosen_sample['video'])
-            choosen_samples['audio'].append(choosen_sample['audio'])
-            choosen_samples['description'].append(choosen_sample['description'])
-
-            game_dicts.clear()
-
-            current_game = game
-            game_dicts.append(sample_dict)
+                choosen_samples.append(choosen_sample)
 
     return choosen_samples
 
@@ -105,12 +108,7 @@ def main():
 
     date = datetime.now()
     date = date.strftime("%m_%d_%y")
-    base_path = os.path.join(args.base_path, f'csv_{date}')
-    csv_path = os.path.join(base_path, 'test_suite_videos.csv')
-
-    if not os.path.isdir(base_path):
-        os.mkdir(base_path)
-
+    csv_path = os.path.join(args.base_path, f'test_suite_videos.csv_{date}',)
 
     print(f"dataset_split_path: {dataset_split_path}")
 
@@ -118,13 +116,26 @@ def main():
 
     # Read dataset split, select samples and run inference
     samples_dicts = read_dataset_split(dataset_split_path, genres_path)
-    samples_dicts = get_one_sample_per_game(samples_dicts)
-    samples_dicts = pd.DataFrame(samples_dicts)
+    samples_dicts = get_n_samples_per_game(samples_dicts, 3)
 
-    #print(samples_dicts.head())
-    #print(samples_dicts.tail())
+    # # Debug
+    # game = ''
+    # n_games = 0
+    # n_samples = 0
+    # for sample_dict in samples_dicts:
+    #     append = ''
+    #     if sample_dict['game'] != game: 
+    #         game = sample_dict['game']
+    #         n_games += 1
+    #         append = '\n'
 
-    samples_dicts.to_csv(csv_path)
+    #     print(append, sample_dict['game'], sample_dict['audio'].split('/')[-1], sample_dict['genre'])
+    #     n_samples += 1
+
+    # print(f"\nN Games: {n_games} | N Samples {n_samples}")
+
+    samples_df = pd.DataFrame(samples_dicts)
+    samples_df.to_csv(csv_path)
 
 if __name__ == "__main__":
     main()

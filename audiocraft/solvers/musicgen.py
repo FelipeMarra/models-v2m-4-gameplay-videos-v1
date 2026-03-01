@@ -750,7 +750,7 @@ class MusicGenSolver(base.StandardSolver):
 
             for idx, batch in enumerate(lp):
                 audio, meta = batch
-                # print(f"\n-------------------> meta {idx}:\n{meta}\n")
+                print(f"\n-------------------> meta {idx}:\n{meta}\n")
                 assert all([self.cfg.sample_rate == m.sample_rate for m in meta])
 
                 target_duration = audio.shape[-1] / self.cfg.sample_rate
@@ -770,7 +770,7 @@ class MusicGenSolver(base.StandardSolver):
                 y = audio.cpu()  # should already be on CPU but just in case
                 sizes = torch.tensor([m.n_frames for m in meta])  # actual sizes without padding
                 sample_rates = torch.tensor([m.sample_rate for m in meta])  # sample rates for audio samples
-                audio_stems = [Path(m.meta.path).stem + f"_{m.seek_time}" for m in meta]
+                audio_stems = [Path(m.meta.json_path).stem + f"_{m.seek_time}" for m in meta]
 
                 if fad is not None:
                     fad_y_pred = y_pred # another variable so that y_pred wont get altered for the next metrics
@@ -988,7 +988,7 @@ class MusicGenSolver(base.StandardSolver):
 
                 sizes = torch.tensor([m.n_frames for m in meta])  # actual sizes without padding
                 sample_rates = torch.tensor([m.sample_rate for m in meta])  # sample rates for audio samples
-                audio_stems = [Path(m.meta.path).stem + f"_{m.seek_time}" for m in meta]
+                audio_stems = [Path(m.meta.json_path).stem + f"_{m.seek_time}" for m in meta]
 
                 if fad is not None:
                     fad_y_pred = y_pred # another variable so that y_pred wont get altered for the next metrics

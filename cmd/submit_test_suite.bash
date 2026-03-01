@@ -6,7 +6,7 @@
 #SBATCH --qos=scientific-qos            # QoS 
 #SBATCH --nodes=1                       # Número de nós 1 de 1
 #SBATCH --ntasks=1                      # Número de tarefas
-#SBATCH --cpus-per-task=16               # CPUs por tarefa 8 de 128 (Max)
+#SBATCH --cpus-per-task=8               # CPUs por tarefa 8 de 128 (Max)
 #SBATCH --mem=32G                       # Memória RAM 32GB de 1007GB(Max)
 #SBATCH --gres=gpu:1               # Solicitar 1 GPU de 4 (Max)
 #SBATCH --time=2-00:00:00               # Tempo máximo (2 dias)
@@ -36,7 +36,7 @@ export USER=vivit_t5_felipe
 export PYTORCH_MPS_HIGH_WATERMARK_RATIO=0.0
 export OMP_NUM_THREADS=1
 
-python3 -u /home/es119256/dados/repos/visual-bardo-video/scripts/test_suite/test_suite.py
+python3 -u /home/es119256/dados/repos/visual-bardo-video/scripts/test_suite/run_test_suite.py
 
 echo "Memória final: $(free -h | grep Mem:)"
 echo "Finalizado em: $(date)"

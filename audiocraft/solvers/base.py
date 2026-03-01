@@ -432,7 +432,11 @@ class StandardSolver(ABC, flashy.BaseSolver):
             if load_best:
                 self.logger.info(f"Ignoring keys when loading best {ignore_state_keys} | And conditioner {ignore_state_conditioner}")
 
-                best_state_model_keys = set(state['best_state']['model'].keys())
+                if state['best_state'].get('model'):
+                    best_state_model_keys = set(state['best_state']['model'].keys())
+                else:
+                    best_state_model_keys = set(state['best_state'].keys())
+
                 for key in best_state_model_keys:
                     #print(f"------> state substates: {key}")
                     for ignore_conditioner in ignore_state_conditioner:

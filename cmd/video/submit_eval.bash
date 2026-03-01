@@ -6,9 +6,9 @@
 #SBATCH --qos=scientific-qos            # QoS 
 #SBATCH --nodes=1                       # Número de nós 1 de 1
 #SBATCH --ntasks=1                      # Número de tarefas
-#SBATCH --cpus-per-task=16               # CPUs por tarefa 8 de 128 (Max)
-#SBATCH --mem=256G                       # Memória RAM 32GB de 1007GB(Max)
-#SBATCH --gres=gpu:1               # Solicitar 1 GPU de 4 (Max)
+#SBATCH --cpus-per-task=24               # CPUs por tarefa 8 de 128 (Max)
+#SBATCH --mem=64G                       # Memória RAM 32GB de 1007GB(Max)
+#SBATCH --gres=gpu:3               # Solicitar 1 GPU de 4 (Max)
 #SBATCH --time=2-00:00:00               # Tempo máximo (2 dias)
 #SBATCH --output=job_%j.out        # Arquivo de saída (%j = job ID)
 #SBATCH --error=job_%j.err         # Arquivo de erro
@@ -55,15 +55,15 @@ dora -P audiocraft run \
     conditioner=video2music \
     dset=snes_mvdb \
     dataset.num_workers=3 \
-    dataset.batch_size=3 \
-    +dataset.evaluate.batch_size=3 \
-    +metrics.fad.tf.batch_size=3 \
+    dataset.batch_size=6 \
+    +dataset.evaluate.batch_size=6 \
+    +metrics.fad.tf.batch_size=6 \
     execute_only=evaluate \
     dataset.evaluate.disable_sampling=true \
     evaluate.metrics.fad=true \
     metrics.fad.use_gt=false \
     metrics.fad.tf.bin=/home/es119256/dados/xps/fad/google-research \
-    evaluate.metrics.kld=false \
+    evaluate.metrics.kld=true \
     metrics.kld.use_gt=false \
     metrics.kld.passt.pretrained_length=30 \
     evaluate.metrics.genre_kld=false \
@@ -77,7 +77,7 @@ dora -P audiocraft run \
     evaluate.metrics.tuned_text_consistency=false \
     evaluate.metrics.gt_tuned_text_consistency=false \
     evaluate.metrics.save_eval_gen=true \
-    evaluate.with_continaution=true
+    evaluate.with_continaution=false
 
 echo "Memória final: $(free -h | grep Mem:)"
 echo "Finalizado em: $(date)"

@@ -910,7 +910,7 @@ class ViViTConditioner4T5(VideoConditioner):
             patch_tokens = patch_tokens.permute(0,2, 1)
 
             patch_tokens = self.compress_conv1(patch_tokens)
-            patch_tokens = self.compress_conv1(patch_tokens)
+            patch_tokens = self.compress_conv2(patch_tokens)
 
             patch_tokens = patch_tokens.permute(0,2, 1)
 

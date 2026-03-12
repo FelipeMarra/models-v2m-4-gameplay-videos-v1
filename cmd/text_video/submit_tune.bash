@@ -47,7 +47,7 @@ dora -P audiocraft run -d \
     dset=snes_mvdb \
     dataset.num_workers=3 \
     dataset.batch_size=6 \
-    dataset.generate.num_samples=9 \
+    dataset.generate.num_samples=10 \
     dataset.valid.num_samples=500 \
     schedule.cosine.warmup=8 \
     optim.optimizer=adamw \

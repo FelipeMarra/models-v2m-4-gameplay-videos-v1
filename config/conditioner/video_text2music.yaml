@@ -27,7 +27,7 @@ conditioners:
     model: t5
     t5:
       name: t5-base
-      finetune: false
+      finetune: true
       word_dropout: 0.3
       normalize_text: false
   video:

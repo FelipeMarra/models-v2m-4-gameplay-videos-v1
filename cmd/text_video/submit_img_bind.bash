@@ -1,7 +1,7 @@
 #!/bin/bash
-#SBATCH --job-name=eval_txt_test          # Nome do job
+#SBATCH --job-name=img_bind          # Nome do job
 #SBATCH --mail-type=ALL                 # Opções: BEGIN, END, FAIL, ALL, etc.
-#SBATCH --mail-user=felipeferreiramarra@gmail.com       # Endereço de e-mail destinatário
+#SBATCH --mail-user=felipe.marra@ufv.br       # Endereço de e-mail destinatário
 #SBATCH --partition=scientific          # Partição
 #SBATCH --qos=scientific-qos            # QoS 
 #SBATCH --nodes=1                       # Número de nós 1 de 1

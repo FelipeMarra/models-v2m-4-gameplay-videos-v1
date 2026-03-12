@@ -6,9 +6,9 @@
 #SBATCH --qos=scientific-qos            # QoS 
 #SBATCH --nodes=1                       # Número de nós 1 de 1
 #SBATCH --ntasks=1                      # Número de tarefas
-#SBATCH --cpus-per-task=24               # CPUs por tarefa 8 de 128 (Max)
-#SBATCH --mem=64G                       # Memória RAM 32GB de 1007GB(Max)
-#SBATCH --gres=gpu:3               # Solicitar 1 GPU de 4 (Max)
+#SBATCH --cpus-per-task=16               # CPUs por tarefa 8 de 128 (Max)
+#SBATCH --mem=32G                       # Memória RAM 32GB de 1007GB(Max)
+#SBATCH --gres=gpu:2              # Solicitar 1 GPU de 4 (Max)
 #SBATCH --time=2-00:00:00               # Tempo máximo (2 dias)
 #SBATCH --output=job_%j.out        # Arquivo de saída (%j = job ID)
 #SBATCH --error=job_%j.err         # Arquivo de erro
@@ -36,9 +36,14 @@ set -o pipefail
 
 # Variáveis de ambiente PyTorch
 export AUDIOCRAFT_TEAM=default
-export USER=vivit_felipe # Will create an audiocraft_vivit_felipe folder inside checkpoints
+export USER=vivit_felipe
+
 export PYTORCH_MPS_HIGH_WATERMARK_RATIO=0.0
 export OMP_NUM_THREADS=1
+export MKL_NUM_THREADS=1
+export NCCL_DEBUG=INFO
+export NUMEXPR_NUM_THREADS=1
+export OPENBLAS_NUM_THREADS=1
 
 # FAD
 export CONDA_ENV_DIR="$CONDA_PREFIX/envs"
@@ -46,7 +51,7 @@ export TF_PYTHON_EXE="$CONDA_ENV_DIR/fad/bin/python"
 export TF_LIBRARY_PATH="$CONDA_ENV_DIR/fad/lib/python3.10/site-packages/nvidia/cudnn/lib"
 
 # By default dataset.evaluate.disable_sampling=true
-dora -P audiocraft run \
+dora -P audiocraft run -d \
     fsdp.use=false \
     autocast=true \
     solver=musicgen/musicgen_video_32khz \
@@ -54,10 +59,10 @@ dora -P audiocraft run \
     continue_from=/home/es119256/dados/xps/audiocraft_vivit_felipe/xps/vivit_musicgen_tuned_e74c0c91 \
     conditioner=video2music \
     dset=snes_mvdb \
-    dataset.num_workers=3 \
+    dataset.num_workers=2 \
     dataset.batch_size=6 \
     +dataset.evaluate.batch_size=6 \
-    +metrics.fad.tf.batch_size=6 \
+    +metrics.fad.tf.batch_size=16 \
     execute_only=evaluate \
     dataset.evaluate.disable_sampling=true \
     evaluate.metrics.fad=true \
@@ -76,7 +81,7 @@ dora -P audiocraft run \
     evaluate.metrics.gt_text_consistency=false \
     evaluate.metrics.tuned_text_consistency=false \
     evaluate.metrics.gt_tuned_text_consistency=false \
-    evaluate.metrics.save_eval_gen=true \
+    evaluate.metrics.save_eval_gen=false \
     evaluate.with_continaution=false
 
 echo "Memória final: $(free -h | grep Mem:)"

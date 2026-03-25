@@ -6,9 +6,9 @@
 #SBATCH --qos=scientific-qos            # QoS 
 #SBATCH --nodes=1                       # Número de nós 1 de 1
 #SBATCH --ntasks=1                      # Número de tarefas
-#SBATCH --cpus-per-task=16               # CPUs por tarefa 8 de 128 (Max)
-#SBATCH --mem=32G                       # Memória RAM 32GB de 1007GB(Max)
-#SBATCH --gres=gpu:2              # Solicitar 1 GPU de 4 (Max)
+#SBATCH --cpus-per-task=12               # CPUs por tarefa 8 de 128 (Max)
+#SBATCH --mem=64G                       # Memória RAM 32GB de 1007GB(Max)
+#SBATCH --gres=gpu:3              # Solicitar 1 GPU de 4 (Max)
 #SBATCH --time=2-00:00:00               # Tempo máximo (2 dias)
 #SBATCH --output=job_%j.out        # Arquivo de saída (%j = job ID)
 #SBATCH --error=job_%j.err         # Arquivo de erro
@@ -56,13 +56,13 @@ dora -P audiocraft run -d \
     autocast=true \
     solver=musicgen/musicgen_video_32khz \
     model/lm/model_scale=medium \
-    continue_from=/home/es119256/dados/xps/audiocraft_vivit_felipe/xps/vivit_musicgen_tuned_e74c0c91 \
+    continue_from=/home/es119256/dados/xps/audiocraft_vivit_felipe/xps/2fbb02a8 \
     conditioner=video2music \
     dset=snes_mvdb \
     dataset.num_workers=2 \
-    dataset.batch_size=6 \
-    +dataset.evaluate.batch_size=6 \
-    +metrics.fad.tf.batch_size=16 \
+    dataset.batch_size=8 \
+    +dataset.evaluate.batch_size=8 \
+    +metrics.fad.tf.batch_size=8 \
     execute_only=evaluate \
     dataset.evaluate.disable_sampling=true \
     evaluate.metrics.fad=true \
@@ -81,8 +81,7 @@ dora -P audiocraft run -d \
     evaluate.metrics.gt_text_consistency=false \
     evaluate.metrics.tuned_text_consistency=false \
     evaluate.metrics.gt_tuned_text_consistency=false \
-    evaluate.metrics.save_eval_gen=false \
-    evaluate.with_continaution=false
+    evaluate.metrics.save_eval_gen=true \
 
 echo "Memória final: $(free -h | grep Mem:)"
 echo "Finalizado em: $(date)"

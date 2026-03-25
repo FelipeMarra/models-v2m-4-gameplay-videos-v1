@@ -35,7 +35,7 @@ echo "Iniciado em: $(date)"
 export AUDIOCRAFT_TEAM=default
 export USER=felipe # Will create an audiocraft_felipe folder inside checkpoints
 
-XP=3b1011b0
+XP=ed94319e
 
 echo "Running ImageBind Score on ViViT->MusicGen XP ${XP}"
 

@@ -1,14 +1,14 @@
 #!/bin/bash
 #SBATCH --job-name=tune_vivit_bardo_video          # Nome do job
 #SBATCH --mail-type=ALL                 # Opções: BEGIN, END, FAIL, ALL, etc.
-#SBATCH --mail-user=felipeferreiramarra@gmail.com       # Endereço de e-mail destinatário
+#SBATCH --mail-user=felipe.marra@ufv.br       # Endereço de e-mail destinatário
 #SBATCH --partition=scientific          # Partição
 #SBATCH --qos=scientific-qos            # QoS 
 #SBATCH --nodes=1                       # Número de nós 1 de 1
 #SBATCH --ntasks=1                      # Número de tarefas
-#SBATCH --cpus-per-task=32               # CPUs por tarefa 8 de 128 (Max)
-#SBATCH --mem=256G                       # Memória RAM 32GB de 1007GB(Max)
-#SBATCH --gres=gpu:3               # Solicitar 1 GPU de 4 (Max)
+#SBATCH --cpus-per-task=8               # CPUs por tarefa 8 de 128 (Max)
+#SBATCH --mem=128G                       # Memória RAM 32GB de 1007GB(Max)
+#SBATCH --gres=gpu:1               # Solicitar 1 GPU de 4 (Max)
 #SBATCH --time=2-00:00:00               # Tempo máximo (2 dias)
 #SBATCH --output=job_%j.out        # Arquivo de saída (%j = job ID)
 #SBATCH --error=job_%j.err         # Arquivo de erro
@@ -36,18 +36,19 @@ export AUDIOCRAFT_TEAM=default
 export USER=vivit_felipe # Will create an audiocraft_vivit_felipe folder inside checkpoints
 export PYTORCH_MPS_HIGH_WATERMARK_RATIO=0.0
 export OMP_NUM_THREADS=1
-# export MKL_NUM_THREADS=1
-# export NUMEXPR_NUM_THREADS=1
-# export OPENBLAS_NUM_THREADS=1
+export MKL_NUM_THREADS=1
+export NUMEXPR_NUM_THREADS=1
+export OPENBLAS_NUM_THREADS=1
 # export MALLOC_ARENA_MAX=2
 
-dora -P audiocraft run -d \
+dora -P audiocraft run \
     fsdp.use=false \
     autocast=true \
     solver=musicgen/musicgen_video_32khz \
     model/lm/model_scale=medium \
     continue_from=//pretrained/facebook/musicgen-medium \
     +ignore_state_conditioner=[description] \
+    conditioners.video.video.finetune=false \
     conditioner=video2music \
     dset=snes_mvdb \
     dataset.num_workers=3 \

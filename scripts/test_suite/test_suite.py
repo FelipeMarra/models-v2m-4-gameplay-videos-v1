@@ -11,7 +11,7 @@ from tqdm import tqdm
 
 from export_and_inference import run_inference_musicgen
 
-import moviepy as mp
+import moviepy.editor as mp
 from pydub import AudioSegment
 
 def is_mp3(file:str):
@@ -161,9 +161,9 @@ def run_inference(samples_dicts:list[dict[str, str]], model_path, base_path:str,
         # Render generated music into input video
         audio_mp = mp.AudioFileClip(gen_sdtk+'.wav')
 
-        audio_mp = audio_mp.subclipped(0, video_mp.duration )
+        audio_mp = audio_mp.subclip(0, video_mp.duration )
         final = video_mp.without_audio()
-        final = video_mp.with_audio(audio_mp)
+        final = video_mp.set_audio(audio_mp)
         try:
             final.write_videofile(os.path.join(vid_folder_path, vid_name+'_gen.mp4'),
                 codec='libx264', 
@@ -177,7 +177,7 @@ def run_inference(samples_dicts:list[dict[str, str]], model_path, base_path:str,
 def main():
     # Parse arguments
     parser = argparse.ArgumentParser()
-    parser.add_argument('--base_path', type=str, default="/home/es119256/dados/xps/checkpoints_and_inference", help="path to folder where results will be stored")
+    parser.add_argument('--base_path', type=str, default="/home/es119256/dados/xps/checkpoints_and_inference_final", help="path to folder where results will be stored")
     parser.add_argument('--genres_path', type=str, default="/home/es119256/dados/datasets/vmdb_3/deepseek_genres.csv", help="path to games genres csv")
     parser.add_argument('--split', type=str, default="test", help="split to be accessed in dataset/snes_mvdb/SPLIT")
     parser.add_argument('--converted_dataset', type=str, default="/home/es119256/dados/repos/visual-bardo-video/dataset", help="path to audiocraft/dataset. snes_mvdb will be added to access the converted dataset")

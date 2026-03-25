@@ -707,6 +707,9 @@ class MusicGenSolver(base.StandardSolver):
         if self.cfg.evaluate.metrics.gt_tuned_text_consistency:
             gt_tuned_text_consistency = builders.get_text_consistency(self.cfg.metrics.tuned_text_consistency).to(self.device)
             should_run_eval = True
+        
+        if self.cfg.evaluate.metrics.save_eval_gen:
+            should_run_eval = True
 
         def get_compressed_audio(audio: torch.Tensor) -> torch.Tensor:
             audio_tokens, scale = self.compression_model.encode(audio.to(self.device))
@@ -750,7 +753,7 @@ class MusicGenSolver(base.StandardSolver):
 
             for idx, batch in enumerate(lp):
                 audio, meta = batch
-                print(f"\n-------------------> meta {idx}:\n{meta}\n")
+                # print(f"\n-------------------> meta {idx}:\n{meta}\n")
                 assert all([self.cfg.sample_rate == m.sample_rate for m in meta])
 
                 target_duration = audio.shape[-1] / self.cfg.sample_rate
@@ -910,6 +913,9 @@ class MusicGenSolver(base.StandardSolver):
 
         if self.cfg.evaluate.metrics.gt_tuned_text_consistency:
             gt_tuned_text_consistency = builders.get_text_consistency(self.cfg.metrics.tuned_text_consistency).to(self.device)
+            should_run_eval = True
+
+        if self.cfg.evaluate.metrics.save_eval_gen:
             should_run_eval = True
 
         def get_compressed_audio(audio: torch.Tensor) -> torch.Tensor:

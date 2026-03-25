@@ -758,8 +758,14 @@ class ViViTConditioner4T5(VideoConditioner):
         )
         # print(f"ViViT CONFIG INSIDE VIVIT CONDITIONER MODIFIED\n{vivit_config}")
 
-        self.vivit = VivitModel.from_pretrained(name, config=vivit_config).train(mode=finetune) # type: ignore
+        vivit = VivitModel.from_pretrained(name, config=vivit_config).train(mode=finetune) # type: ignore
         #vivit = VivitModel.from_pretrained(name).train(mode=finetune) # type: ignore
+
+        if finetune:
+            self.vivit = vivit
+        else:
+            # this makes sure that the vivit models is not part of the saved checkpoint
+            self.__dict__['vivit'] = vivit.to(device)
 
         self.compress_conv1 = nn.Conv1d(
             in_channels=self.MODELS_DIMS[name], 
@@ -767,6 +773,7 @@ class ViViTConditioner4T5(VideoConditioner):
             kernel_size=kernel_size,
             stride=kernel_size
         )
+        self.norm1 = nn.LayerNorm(self.compress_conv1.out_channels)
 
         self.compress_conv2 = nn.Conv1d(
             in_channels=self.MODELS_DIMS[name], 
@@ -774,6 +781,7 @@ class ViViTConditioner4T5(VideoConditioner):
             kernel_size=kernel_size,
             stride=kernel_size
         )
+        self.norm2 = nn.LayerNorm(self.compress_conv2.out_channels)
 
     def read_video_pyav(self, container, indices):
         '''
@@ -863,6 +871,19 @@ class ViViTConditioner4T5(VideoConditioner):
         indices = np.clip(indices, start_idx, end_idx - 1).astype(np.int64)
         return indices
 
+    def lim_spaced_frame_indices(self, clip_len, seg_len):
+        '''
+        Get a given number of linearly spaced frame indices from the video.
+        Args:
+            clip_len (`int`): Total number of frames to sample.
+            seg_len (`int`): Maximum allowed index of sample's last frame.
+        Returns:
+            indices (`list[int]`): List of sampled frame indices
+        '''
+        indices = np.linspace(0, seg_len, num=clip_len)
+        indices = np.clip(indices, 0, seg_len - 1).astype(np.int64)
+        return indices
+
     def tokenize(self, x: tp.List[tp.Optional[str]]) -> tp.Dict[str, tp.List[tp.Any]]:
         # video_len: video total seconds
         # if current sample doesn't have a certain attribute, replace with empty string
@@ -873,7 +894,11 @@ class ViViTConditioner4T5(VideoConditioner):
                 if isinstance(v, str):
                     container = av.open(v)
                     #indices, window_duration = self.sample_frame_indices(v, clip_len=32, seg_len=container.streams.video[0].frames)
+                    #if self.training:
                     indices = self.sample_frame_indices(video_path=v, clip_len=32, frame_sample_rate=2, seg_len=container.streams.video[0].frames)
+                    # else:
+                    #     indices = self.lim_spaced_frame_indices(clip_len=32, seg_len=container.streams.video[0].frames)
+                    #     print(f"\n Lin Spacced Sampling {indices}\n")
                     video = self.read_video_pyav(container=container, indices=indices)
                     video = self.image_processor(video)
 
@@ -907,12 +932,17 @@ class ViViTConditioner4T5(VideoConditioner):
             cls_token = outputs.last_hidden_state[:,0,:].unsqueeze(1)
             patch_tokens = outputs.last_hidden_state[:,1:,:]
 
-            patch_tokens = patch_tokens.permute(0,2, 1)
-
+            patch_tokens = patch_tokens.permute(0,2,1)
             patch_tokens = self.compress_conv1(patch_tokens)
-            patch_tokens = self.compress_conv2(patch_tokens)
+            patch_tokens = patch_tokens.permute(0,2,1)
+            patch_tokens = self.norm1(patch_tokens)
+            patch_tokens = F.gelu(patch_tokens)
 
-            patch_tokens = patch_tokens.permute(0,2, 1)
+            patch_tokens = patch_tokens.permute(0,2,1)
+            patch_tokens = self.compress_conv2(patch_tokens)
+            patch_tokens = patch_tokens.permute(0,2,1)
+            patch_tokens = self.norm2(patch_tokens)
+            patch_tokens = F.gelu(patch_tokens)
 
             embeds = torch.cat([cls_token, patch_tokens], dim=1)
 

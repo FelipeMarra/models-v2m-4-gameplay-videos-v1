@@ -6,8 +6,8 @@
 #SBATCH --qos=scientific-qos            # QoS 
 #SBATCH --nodes=1                       # Número de nós 1 de 1
 #SBATCH --ntasks=1                      # Número de tarefas
-#SBATCH --cpus-per-task=32               # CPUs por tarefa 8 de 128 (Max)
-#SBATCH --mem=128G                       # Memória RAM 32GB de 1007GB(Max)
+#SBATCH --cpus-per-task=12               # CPUs por tarefa 8 de 128 (Max)
+#SBATCH --mem=64G                       # Memória RAM 32GB de 1007GB(Max)
 #SBATCH --gres=gpu:3               # Solicitar 1 GPU de 4 (Max)
 #SBATCH --time=2-00:00:00               # Tempo máximo (2 dias)
 #SBATCH --output=job_%j.out        # Arquivo de saída (%j = job ID)
@@ -44,6 +44,8 @@ dora -P audiocraft run -d \
     model/lm/model_scale=medium \
     continue_from=//pretrained/facebook/musicgen-medium \
     conditioner=video_text2music \
+    conditioners.description.t5.finetune=false \
+    conditioners.video.video_4_text.finetune=true \
     dset=snes_mvdb \
     dataset.num_workers=3 \
     dataset.batch_size=6 \
@@ -52,7 +54,7 @@ dora -P audiocraft run -d \
     schedule.cosine.warmup=8 \
     optim.optimizer=adamw \
     optim.lr=1e-4 \
-    optim.epochs=75 \
+    optim.epochs=150 \
     optim.updates_per_epoch=2000 \
     optim.adam.weight_decay=0.01 \
     optim.ema.use=false \

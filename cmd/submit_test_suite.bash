@@ -36,7 +36,11 @@ export USER=vivit_t5_felipe
 export PYTORCH_MPS_HIGH_WATERMARK_RATIO=0.0
 export OMP_NUM_THREADS=1
 
-python3 -u /home/es119256/dados/repos/visual-bardo-video/scripts/test_suite/run_test_suite.py
+SCRIPT=/home/es119256/dados/repos/visual-bardo-video/scripts/test_suite/test_suite.py
+MODEL_PATH=/home/es119256/dados/xps/audiocraft_vivit_t5_felipe/xps/f9a80b7b
+MODEL_NAME=T5+ViViT_MusicGen_Tuned_wO_ViViT
+
+python3 -u $SCRIPT --model_path $MODEL_PATH --model_name $MODEL_NAME 
 
 echo "Memória final: $(free -h | grep Mem:)"
 echo "Finalizado em: $(date)"

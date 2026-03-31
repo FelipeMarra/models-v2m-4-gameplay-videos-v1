@@ -962,7 +962,10 @@ class ViViTConditioner4T5(VideoConditioner):
 
 class BatchMultiCrop(v2.Transform):
     def forward(self, images_or_videos: tp.Tuple[torch.Tensor]):
-        return torch.stack(images_or_videos)
+        global counter
+        tl, tr, _, _, center = images_or_videos # type: ignore | bottom will be equal to top since crop_height == resized_video_height
+
+        return torch.stack([tl, center, tr])
 
 class SNESViTImageProcessor():
     def __init__(self, normalize:bool, training:bool) -> None:

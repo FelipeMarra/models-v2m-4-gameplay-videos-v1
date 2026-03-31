@@ -1,13 +1,13 @@
 #!/bin/bash
-#SBATCH --job-name=t5_vivit          # Nome do job
+#SBATCH --job-name=tune_vivit_bardo_video          # Nome do job
 #SBATCH --mail-type=ALL                 # Opções: BEGIN, END, FAIL, ALL, etc.
-#SBATCH --mail-user=felipe.marra@ufv.br       # Endereço de e-mail destinatário
+#SBATCH --mail-user=felipeferreiramarra@gmail.com       # Endereço de e-mail destinatário
 #SBATCH --partition=scientific          # Partição
 #SBATCH --qos=scientific-qos            # QoS 
 #SBATCH --nodes=1                       # Número de nós 1 de 1
 #SBATCH --ntasks=1                      # Número de tarefas
-#SBATCH --cpus-per-task=16               # CPUs por tarefa 8 de 128 (Max)
-#SBATCH --mem=64G                       # Memória RAM 32GB de 1007GB(Max)
+#SBATCH --cpus-per-task=32               # CPUs por tarefa 8 de 128 (Max)
+#SBATCH --mem=128G                       # Memória RAM 32GB de 1007GB(Max)
 #SBATCH --gres=gpu:1               # Solicitar 1 GPU de 4 (Max)
 #SBATCH --time=2-00:00:00               # Tempo máximo (2 dias)
 #SBATCH --output=job_%j.out        # Arquivo de saída (%j = job ID)
@@ -42,20 +42,18 @@ dora -P audiocraft run -d \
     autocast=true \
     solver=musicgen/musicgen_video_32khz \
     model/lm/model_scale=medium \
-    continue_from=/home/es119256/dados/xps/audiocraft_vivit_t5_felipe/xps/829f080a/checkpoint.th \
-    conditioner=video_text2music \
+    continue_from=//pretrained/facebook/musicgen-medium \
+    conditioner=vivit_t52music \
     dset=snes_mvdb \
-    dataset.num_workers=3 \
+    dataset.num_workers=1 \
     dataset.batch_size=3 \
-    dataset.train.shuffle=true \
-    dataset.train.disable_sampling=true \
-    dataset.generate.num_samples=10 \
-    dataset.valid.num_samples=500 \
-    schedule.cosine.warmup=8 \
+    dataset.generate.num_samples=1 \
+    dataset.valid.num_samples=1 \
+    schedule.cosine.warmup=1 \
     optim.optimizer=adamw \
-    optim.lr=1e-6 \
-    optim.epochs=150 \
-    optim.updates_per_epoch=null \
+    optim.lr=1e-4 \
+    optim.epochs=2 \
+    optim.updates_per_epoch=2 \
     optim.adam.weight_decay=0.01 \
     optim.ema.use=false \
     deadlock.timeout=1200 \

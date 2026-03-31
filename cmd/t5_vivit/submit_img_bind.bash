@@ -1,5 +1,5 @@
 #!/bin/bash
-#SBATCH --job-name=tune_vivit_bardo_video          # Nome do job
+#SBATCH --job-name=img_bind          # Nome do job
 #SBATCH --mail-type=ALL                 # Opções: BEGIN, END, FAIL, ALL, etc.
 #SBATCH --mail-user=felipe.marra@ufv.br       # Endereço de e-mail destinatário
 #SBATCH --partition=scientific          # Partição
@@ -20,6 +20,7 @@ module load CUDA/12.6.0
 
 # Ativar ambiente
 source ~/miniconda3/bin/activate
+conda activate img_bind
 echo "$(conda info --envs)"
 
 # Informações do job
@@ -32,15 +33,15 @@ ulimit -a | egrep 'virtual memory|max resident set|open files'
 echo "Iniciado em: $(date)"
 
 export AUDIOCRAFT_TEAM=default
-export USER=vivit_t5_felipe
-export PYTORCH_MPS_HIGH_WATERMARK_RATIO=0.0
-export OMP_NUM_THREADS=1
+export USER=felipe # Will create an audiocraft_felipe folder inside checkpoints
 
-SCRIPT=/home/es119256/dados/repos/visual-bardo-video/scripts/test_suite/test_suite.py
-MODEL_PATH=/home/es119256/dados/xps/audiocraft_vivit_t5_felipe/xps/b1571edd 
-MODEL_NAME=T5+ViViT_MusicGen_Tuned_wO_T5
+XP=59b5c0fc
 
-python3 -u $SCRIPT --model_path $MODEL_PATH --model_name $MODEL_NAME 
+echo "Running ImageBind Score on ViViT->MusicGen XP ${XP}"
+
+python3 -u /home/es119256/dados/repos/visual-bardo-video/audiocraft/metrics/img_bind_consistency.py \
+    --eval_path /home/es119256/dados/xps/audiocraft_vivit_t5_felipe/xps/${XP} \
+    --dataset_path /home/es119256/dados/datasets/vmdb/nintendo-snes-spc
 
 echo "Memória final: $(free -h | grep Mem:)"
 echo "Finalizado em: $(date)"

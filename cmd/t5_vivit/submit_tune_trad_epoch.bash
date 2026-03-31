@@ -1,14 +1,14 @@
 #!/bin/bash
-#SBATCH --job-name=tune_vivit_bardo_video          # Nome do job
+#SBATCH --job-name=t5_vivit_trad_epoch          # Nome do job
 #SBATCH --mail-type=ALL                 # Opções: BEGIN, END, FAIL, ALL, etc.
 #SBATCH --mail-user=felipe.marra@ufv.br       # Endereço de e-mail destinatário
 #SBATCH --partition=scientific          # Partição
 #SBATCH --qos=scientific-qos            # QoS 
 #SBATCH --nodes=1                       # Número de nós 1 de 1
 #SBATCH --ntasks=1                      # Número de tarefas
-#SBATCH --cpus-per-task=8               # CPUs por tarefa 8 de 128 (Max)
-#SBATCH --mem=32G                       # Memória RAM 32GB de 1007GB(Max)
-#SBATCH --gres=gpu:1               # Solicitar 1 GPU de 4 (Max)
+#SBATCH --cpus-per-task=24               # CPUs por tarefa 8 de 128 (Max)
+#SBATCH --mem=128G                       # Memória RAM 32GB de 1007GB(Max)
+#SBATCH --gres=gpu:3               # Solicitar 1 GPU de 4 (Max)
 #SBATCH --time=2-00:00:00               # Tempo máximo (2 dias)
 #SBATCH --output=job_%j.out        # Arquivo de saída (%j = job ID)
 #SBATCH --error=job_%j.err         # Arquivo de erro
@@ -31,16 +31,38 @@ echo "Limites do processo:"
 ulimit -a | egrep 'virtual memory|max resident set|open files'
 echo "Iniciado em: $(date)"
 
+# Variáveis de ambiente PyTorch
 export AUDIOCRAFT_TEAM=default
-export USER=vivit_t5_felipe
+export USER=vivit_t5_felipe # Will create an audiocraft_vivit_felipe folder inside checkpoints
 export PYTORCH_MPS_HIGH_WATERMARK_RATIO=0.0
 export OMP_NUM_THREADS=1
 
-SCRIPT=/home/es119256/dados/repos/visual-bardo-video/scripts/test_suite/test_suite.py
-MODEL_PATH=/home/es119256/dados/xps/audiocraft_vivit_t5_felipe/xps/b1571edd 
-MODEL_NAME=T5+ViViT_MusicGen_Tuned_wO_T5
-
-python3 -u $SCRIPT --model_path $MODEL_PATH --model_name $MODEL_NAME 
+dora -P audiocraft run -d \
+    fsdp.use=false \
+    autocast=true \
+    solver=musicgen/musicgen_video_32khz \
+    model/lm/model_scale=medium \
+    continue_from=//pretrained/facebook/musicgen-medium \
+    conditioner=vivit_t52music \
+    dset=snes_mvdb \
+    dataset.num_workers=3 \
+    dataset.batch_size=6 \
+    dataset.train.shuffle=true \
+    dataset.train.disable_sampling=true \
+    dataset.generate.num_samples=0 \
+    dataset.valid.num_samples=500 \
+    schedule.cosine.warmup=8 \
+    optim.optimizer=adamw \
+    optim.lr=1e-4 \
+    optim.epochs=150 \
+    optim.updates_per_epoch=null \
+    optim.adam.weight_decay=0.01 \
+    optim.ema.use=false \
+    deadlock.timeout=1200 \
+    generate.lm.prompted_samples=False \
+    generate.lm.unprompted_samples=True \
+    generate.every=5 \
+    logging.log_tensorboard=true
 
 echo "Memória final: $(free -h | grep Mem:)"
 echo "Finalizado em: $(date)"

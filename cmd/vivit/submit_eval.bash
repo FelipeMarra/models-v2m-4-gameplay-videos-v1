@@ -1,14 +1,14 @@
 #!/bin/bash
-#SBATCH --job-name=eval_t5_vivit          # Nome do job
+#SBATCH --job-name=eval_vivit_bardo_video          # Nome do job
 #SBATCH --mail-type=ALL                 # Opções: BEGIN, END, FAIL, ALL, etc.
 #SBATCH --mail-user=felipe.marra@ufv.br       # Endereço de e-mail destinatário
 #SBATCH --partition=scientific          # Partição
 #SBATCH --qos=scientific-qos            # QoS 
 #SBATCH --nodes=1                       # Número de nós 1 de 1
 #SBATCH --ntasks=1                      # Número de tarefas
-#SBATCH --cpus-per-task=8               # CPUs por tarefa 8 de 128 (Max)
-#SBATCH --mem=32G                       # Memória RAM 32GB de 1007GB(Max)
-#SBATCH --gres=gpu:2               # Solicitar 1 GPU de 4 (Max)
+#SBATCH --cpus-per-task=12               # CPUs por tarefa 8 de 128 (Max)
+#SBATCH --mem=64G                       # Memória RAM 32GB de 1007GB(Max)
+#SBATCH --gres=gpu:3              # Solicitar 1 GPU de 4 (Max)
 #SBATCH --time=2-00:00:00               # Tempo máximo (2 dias)
 #SBATCH --output=job_%j.out        # Arquivo de saída (%j = job ID)
 #SBATCH --error=job_%j.err         # Arquivo de erro
@@ -36,16 +36,14 @@ set -o pipefail
 
 # Variáveis de ambiente PyTorch
 export AUDIOCRAFT_TEAM=default
-export USER=vivit_t5_felipe # Will create an audiocraft_vivit_felipe folder inside checkpoints
+export USER=vivit_felipe
+
 export PYTORCH_MPS_HIGH_WATERMARK_RATIO=0.0
 export OMP_NUM_THREADS=1
 export MKL_NUM_THREADS=1
 export NCCL_DEBUG=INFO
 export NUMEXPR_NUM_THREADS=1
 export OPENBLAS_NUM_THREADS=1
-
-# export ONEDNN_PRIMITIVE_CACHE_CAPACITY=0
-# export DNNL_MAX_CPU_ISA=AVX2
 
 # FAD
 export CONDA_ENV_DIR="$CONDA_PREFIX/envs"
@@ -58,16 +56,16 @@ dora -P audiocraft run -d \
     autocast=true \
     solver=musicgen/musicgen_video_32khz \
     model/lm/model_scale=medium \
-    continue_from=/home/es119256/dados/xps/audiocraft_vivit_t5_felipe/xps/f9a80b7b/checkpoint.th \
-    conditioner=video_text2music \
+    continue_from=/home/es119256/dados/xps/audiocraft_vivit_felipe/xps/2fbb02a8 \
+    conditioner=vivit2music \
     dset=snes_mvdb \
-    dataset.num_workers=4 \
-    dataset.batch_size=16 \
-    +dataset.evaluate.batch_size=16 \
-    +metrics.fad.tf.batch_size=16 \
+    dataset.num_workers=2 \
+    dataset.batch_size=8 \
+    +dataset.evaluate.batch_size=8 \
+    +metrics.fad.tf.batch_size=8 \
     execute_only=evaluate \
     dataset.evaluate.disable_sampling=true \
-    evaluate.metrics.fad=false \
+    evaluate.metrics.fad=true \
     metrics.fad.use_gt=false \
     metrics.fad.tf.bin=/home/es119256/dados/xps/fad/google-research \
     evaluate.metrics.kld=true \
@@ -83,7 +81,7 @@ dora -P audiocraft run -d \
     evaluate.metrics.gt_text_consistency=false \
     evaluate.metrics.tuned_text_consistency=false \
     evaluate.metrics.gt_tuned_text_consistency=false \
-    evaluate.metrics.save_eval_gen=true
+    evaluate.metrics.save_eval_gen=true \
 
 echo "Memória final: $(free -h | grep Mem:)"
 echo "Finalizado em: $(date)"

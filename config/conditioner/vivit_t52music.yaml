@@ -31,8 +31,8 @@ conditioners:
       word_dropout: 0.3
       normalize_text: false
   video:
-    model: video_4_text
-    video_4_text:
+    model: vivit_4_text
+    vivit_4_text:
       name: google/vivit-b-16x2-kinetics400
       video_len: 32
       finetune: false

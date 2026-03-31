@@ -1,14 +1,14 @@
 #!/bin/bash
-#SBATCH --job-name=t5_vivit_trad_epoch          # Nome do job
+#SBATCH --job-name=t5_vivit          # Nome do job
 #SBATCH --mail-type=ALL                 # Opções: BEGIN, END, FAIL, ALL, etc.
 #SBATCH --mail-user=felipe.marra@ufv.br       # Endereço de e-mail destinatário
 #SBATCH --partition=scientific          # Partição
 #SBATCH --qos=scientific-qos            # QoS 
 #SBATCH --nodes=1                       # Número de nós 1 de 1
 #SBATCH --ntasks=1                      # Número de tarefas
-#SBATCH --cpus-per-task=24               # CPUs por tarefa 8 de 128 (Max)
+#SBATCH --cpus-per-task=16               # CPUs por tarefa 8 de 128 (Max)
 #SBATCH --mem=128G                       # Memória RAM 32GB de 1007GB(Max)
-#SBATCH --gres=gpu:3               # Solicitar 1 GPU de 4 (Max)
+#SBATCH --gres=gpu:2               # Solicitar 1 GPU de 4 (Max)
 #SBATCH --time=2-00:00:00               # Tempo máximo (2 dias)
 #SBATCH --output=job_%j.out        # Arquivo de saída (%j = job ID)
 #SBATCH --error=job_%j.err         # Arquivo de erro
@@ -42,14 +42,13 @@ dora -P audiocraft run -d \
     autocast=true \
     solver=musicgen/musicgen_video_32khz \
     model/lm/model_scale=medium \
-    continue_from=//pretrained/facebook/musicgen-medium \
-    conditioner=video_text2music \
+    conditioner=vivit_t52music \
     dset=snes_mvdb \
     dataset.num_workers=3 \
     dataset.batch_size=6 \
     dataset.train.shuffle=true \
     dataset.train.disable_sampling=true \
-    dataset.generate.num_samples=0 \
+    dataset.generate.num_samples=9 \
     dataset.valid.num_samples=500 \
     schedule.cosine.warmup=8 \
     optim.optimizer=adamw \
@@ -61,7 +60,6 @@ dora -P audiocraft run -d \
     deadlock.timeout=1200 \
     generate.lm.prompted_samples=False \
     generate.lm.unprompted_samples=True \
-    generate.every=5 \
     logging.log_tensorboard=true
 
 echo "Memória final: $(free -h | grep Mem:)"

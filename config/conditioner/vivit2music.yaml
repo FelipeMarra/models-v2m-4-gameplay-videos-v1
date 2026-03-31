@@ -16,8 +16,8 @@ fuser:
 
 conditioners:
   video:
-    model: video
-    video:
+    model: vivit
+    vivit:
       name: google/vivit-b-16x2-kinetics400
       video_len: 32
       finetune: true

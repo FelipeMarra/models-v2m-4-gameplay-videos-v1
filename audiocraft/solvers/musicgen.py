@@ -515,9 +515,14 @@ class MusicGenSolver(base.StandardSolver):
         # generate by sampling from the LM
         with self.autocast:
             total_gen_len = math.ceil(gen_duration * self.compression_model.frame_rate)
+            prev_training_state = self.model.training
+            self.model.eval()
+
             gen_tokens = self.model.generate(
                 prompt_tokens, attributes, max_gen_len=total_gen_len,
                 num_samples=num_samples, **self.generation_params)
+
+            self.model.train(prev_training_state)
 
         # generate audio from tokens
         assert gen_tokens.dim() == 3

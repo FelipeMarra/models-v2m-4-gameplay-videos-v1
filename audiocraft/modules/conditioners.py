@@ -17,7 +17,7 @@ import einops
 from num2words import num2words
 import spacy
 from transformers import T5EncoderModel, T5Tokenizer  # type: ignore
-from transformers import VivitModel
+from transformers import VivitModel, ViTModel
 import torch
 from torch import nn
 import torch.nn.functional as F
@@ -697,7 +697,7 @@ class ViViTConditioner(VideoConditioner):
         videos = torch.cat(videos, 0).float() # type: ignore
         # print(f"videos: {videos.shape}")
 
-        with torch.set_grad_enabled(self.finetune), self.autocast:
+        with torch.set_grad_enabled(self.finetune and self.training), self.autocast:
             outputs = self.vivit(videos)
             embeds = outputs.last_hidden_state
 
@@ -927,11 +927,12 @@ class ViViTConditioner4T5(VideoConditioner):
         videos = torch.cat(videos, 0).float() # type: ignore
         # print(f"videos: {videos.shape}")
 
-        with self.autocast:
+        with torch.set_grad_enabled(self.finetune and self.training), self.autocast:
             outputs = self.vivit(videos)
             cls_token = outputs.last_hidden_state[:,0,:].unsqueeze(1)
             patch_tokens = outputs.last_hidden_state[:,1:,:]
 
+        with self.autocast:
             patch_tokens = patch_tokens.permute(0,2,1)
             patch_tokens = self.compress_conv1(patch_tokens)
             patch_tokens = patch_tokens.permute(0,2,1)
@@ -955,6 +956,225 @@ class ViViTConditioner4T5(VideoConditioner):
         # print(f"FINAL ViViT embeds shape: {embeds.shape}")
 
         # print(f"\n ViViT mask shape: {mask.shape} \n")
+        embeds = (embeds * mask.unsqueeze(-1).to(self.device))
+
+        return embeds, mask
+
+class BatchMultiCrop(v2.Transform):
+    def forward(self, images_or_videos: tp.Tuple[torch.Tensor]):
+        return torch.stack(images_or_videos)
+
+class SNESViTImageProcessor():
+    def __init__(self, normalize:bool, training:bool) -> None:
+        self.normalize = normalize
+
+        if training:
+            self.compose = v2.Compose([
+                v2.Resize(size=224, antialias=True), # Resize short side to 244, which will bring us close to original SNES resolution
+                v2.RandomCrop(size=(224, 224)), # Random horizontal window given that height is already 244
+                v2.RandomHorizontalFlip(p=0.5)
+            ])
+        else:
+            self.compose = v2.Compose([
+                v2.Resize(size=224, antialias=True), # Resize short side to 244, which will bring us close to original SNES resolution
+                v2.FiveCrop(size=(224, 224)), # Random horizontal window given that height is already 244
+                BatchMultiCrop(),
+                v2.RandomHorizontalFlip(p=0.5)
+            ])
+
+    def __call__(self, videos:torch.Tensor) -> torch.Tensor:
+        videos = self.compose(videos)
+
+        if self.normalize:
+            videos = videos / 255
+
+        return videos
+
+class ViTConditioner(VideoConditioner):
+    """
+        ViT-based Video Conditioner
+    """
+
+    MODELS = ["google/vit-base-patch16-224"]
+    MODELS_DIMS = {
+        "google/vit-base-patch16-224": 768,
+    }
+
+    def __init__(self, name: str, output_dim: int, finetune:bool, device:str, 
+                autocast_dtype: tp.Optional[str] = 'float32', video_len:int=32, 
+                num_hidden_layers:int=12, num_attention_heads:int=12, kernel_size=2):
+        assert name in self.MODELS, f"Unrecognized ViViT model name (should in {self.MODELS})"
+
+        super().__init__(self.MODELS_DIMS[name], output_dim)
+
+        self.device = device
+        self.name = name
+        self.finetune = finetune
+        self.video_len = video_len
+
+        if autocast_dtype is None or self.device == 'cpu':
+            self.autocast = TorchAutocast(enabled=False)
+            if self.device != 'cpu':
+                logger.warning("ViT has no autocast, this might lead to NaN")
+        else:
+            dtype = getattr(torch, autocast_dtype)
+            assert isinstance(dtype, torch.dtype)
+            logger.info(f"ViT will be evaluated with autocast as {autocast_dtype}")
+            self.autocast = TorchAutocast(enabled=True, device_type=self.device, dtype=dtype)
+
+        self.training_image_processor = SNESViTImageProcessor(normalize=True, training=True)
+        self.inf_image_processor = SNESViTImageProcessor(normalize=True, training=False)
+
+        vit_config = ViTModel.config_class.from_pretrained(name)
+        # print(f"ViT CONFIG INSIDE VIT CONDITIONER\n{vit_config}")
+
+        # vit_config.update(
+        #     {
+        #         "num_hidden_layers": num_hidden_layers,
+        #         "num_attention_heads": num_attention_heads
+        #     }
+        # )
+        # print(f"ViT CONFIG INSIDE VIT CONDITIONER MODIFIED\n{vit_config}")
+
+        vit = ViTModel.from_pretrained(name, config=vit_config).train(mode=finetune) # type: ignore
+        #vit = VitModel.from_pretrained(name).train(mode=finetune) # type: ignore
+
+        if finetune:
+            self.vit = vit
+        else:
+            # this makes sure that the vit models is not part of the saved checkpoint
+            self.__dict__['vit'] = vit.to(device)
+
+    def lin_spaced_frame_indices(self, clip_len, seg_len):
+        '''
+        Get a given number of linearly spaced frame indices from the video.
+        Args:
+            clip_len (`int`): Total number of frames to sample.
+            seg_len (`int`): Maximum allowed index of sample's last frame.
+        Returns:
+            indices (`list[int]`): List of sampled frame indices
+        '''
+        indices = np.linspace(0, seg_len, num=clip_len)
+        indices = np.clip(indices, 0, seg_len - 1).astype(np.int64)
+        return indices
+
+    def read_video_pyav(self, container, indices):
+        '''
+        Decode the video with PyAV decoder.
+        Args:
+            container (`av.container.input.InputContainer`): PyAV container.
+            indices (`list[int]`): List of frame indices to decode.
+        Returns:
+            result (torch.Tensor):tensor of decoded frames of shape (num_frames, 3, height, width).
+        '''
+        frames = []
+        container.seek(0)
+        start_index = indices[0]
+        end_index = indices[-1]
+        for i, frame in enumerate(container.decode(video=0)):
+            if i > end_index:
+                break
+            if i >= start_index and i in indices:
+                frames.append(frame)
+        video = torch.stack([torch.from_numpy(x.to_ndarray(format="rgb24")) for x in frames])
+        video = video.permute(0, 3, 1, 2)
+        return video
+
+    def write_video(self, file_name, frame_rate, video_tensor):
+        """
+            For debugging
+        """
+        # Def not sufficient to bring the image back to the original pixel values
+        # after the ImageProcessor stuff, but enough to get an ideia if it is working
+        video_tensor = video_tensor.permute(0, 2, 3, 1)
+        torchvision.io.write_video(f'{file_name}.mp4', video_tensor, frame_rate)
+
+    def tokenize(self, x: tp.List[tp.Optional[str]]) -> tp.Dict[str, tp.List[tp.Any]]:
+        # video_len: video total seconds
+        # if current sample doesn't have a certain attribute, replace with empty string
+        entries: tp.List[str] = [xi if xi is not None else "" for xi in x]
+        videos:tp.Dict[str, tp.Any] = {"video": [], "attention_mask": []}
+        for v in entries:
+            if v != "":
+                if isinstance(v, str):
+                    container = av.open(v)
+
+                    indices = self.lin_spaced_frame_indices(clip_len=self.video_len, seg_len=container.streams.video[0].frames)
+                    print(f"\n Lin Spacced Sampling {indices} from {container.streams.video[0].frames} available frames\n")
+                    video = self.read_video_pyav(container=container, indices=indices)
+                    if self.training:
+                        video = self.training_image_processor(video)
+                    else:
+                        video = self.inf_image_processor(video)
+                    print(f"\n TOKENIZE video shape {video.shape}\n")
+
+                    # Save video to test augs
+                    # file_name = v.split('.')[0].split('/')[-1]
+                    # frame_rate = 32 #self.video_len/(window_duration)
+                    # self.write_video(file_name, frame_rate, video.to(torch.int32))
+                else:
+                    video = v.to(self.device)
+
+                videos["video"].append(video)
+                videos['attention_mask'].append(1)
+            else:
+                print("\n@@@@@@@@@@@@@@ TOKENIZE ZEROS ####################\n")
+                if self.training:
+                    video = torch.zeros(self.video_len, 3, 224, 224).to(self.device)
+                else:
+                    video = torch.zeros(5, self.video_len, 3, 224, 224).to(self.device)
+
+                videos["video"].append(video)
+                videos['attention_mask'].append(0)
+
+        return videos
+
+    def forward(self, inputs: tp.Dict[str, tp.List[torch.Tensor]]) -> ConditionType:
+        mask = inputs['attention_mask']
+        videos = inputs['video']
+        print(f"videos: {len(videos)} | one video shape {videos[0].shape}")
+
+        empty_idx = torch.LongTensor([i for i, xi in enumerate(mask) if xi == 0])
+        second_mask_dim = videos[0].shape[0] if self.training else videos[0].shape[1]
+        mask = torch.ones(len(videos), second_mask_dim)
+        mask[empty_idx, :] = 0
+        print(f"mask shape: {mask.shape}")
+
+        # Looping will save a tremendous amount of memory, since we won't need to keep the patch level tokens stored
+        embeds = []
+
+        if self.training:
+            with torch.set_grad_enabled(self.finetune), self.autocast:
+                for video in videos:
+                    video = video.cuda()
+                    outputs = self.vit(video)
+                    print(f"outputs shape: {outputs.last_hidden_state.shape}")
+                    cls_token = outputs.last_hidden_state[:,0,:].unsqueeze(0) # 1, Frames, Hidden
+                    print(f"cls_token shape: {cls_token.shape}")
+                    embeds.append(cls_token)
+        else:
+            with torch.set_grad_enabled(False), self.autocast:
+                for video in videos:
+                    CROPS, F, C, H, W = video.shape
+                    video = video.cuda().reshape(CROPS*F, C, H, W) # Crops*Frames, C, H, W 
+                    outputs = self.vit(video)
+                    print(f"outputs shape: {outputs.last_hidden_state.shape}")
+                    cls_token:torch.Tensor = outputs.last_hidden_state[:,0,:] # Crops * Frames, Hidden
+                    print(f"cls_token shape: {cls_token.shape}")
+                    cls_token = cls_token.reshape(CROPS, F, -1) # Crops, Frames, Hidden
+                    print(f"cls_token REshape: {cls_token.shape}")
+                    cls_token = cls_token.mean(dim=0, keepdim=True)
+                    print(f"cls_token MEAN: {cls_token.shape}")
+                    embeds.append(cls_token)
+
+        embeds = torch.cat(embeds, 0)
+        print(f"embeds shape: {embeds.shape}")
+
+        embeds = embeds.to(self.output_proj.weight)
+        embeds = self.output_proj(embeds)
+        print(f"FINAL ViT embeds shape: {embeds.shape}")
+
+        print(f"\n ViT mask shape: {mask.shape} \n")
         embeds = (embeds * mask.unsqueeze(-1).to(self.device))
 
         return embeds, mask

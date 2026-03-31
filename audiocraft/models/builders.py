@@ -28,6 +28,7 @@ from ..modules.conditioners import (BaseConditioner,
                                     ConditioningProvider,
                                     T5Conditioner, 
                                     ViViTConditioner,
+                                    ViTConditioner,
                                     ViViTConditioner4T5)
 from ..utils.utils import dict_from_config
 from .encodec import (CompressionModel, EncodecModel,
@@ -146,13 +147,19 @@ def get_conditioner_provider(
             conditioners[str(cond)] = T5Conditioner(
                 output_dim=output_dim, device=device, **model_args
             )
-        elif model_type == 'video':
+        elif model_type == 'vivit':
             conditioners[str(cond)] = ViViTConditioner(
                 output_dim=output_dim,
                 device=device,
                 **model_args
             )
-        elif model_type == 'video_4_text':
+        elif model_type == 'vit':
+            conditioners[str(cond)] = ViTConditioner(
+                output_dim=output_dim,
+                device=device,
+                **model_args
+            )
+        elif model_type == 'vivit_4_text':
             conditioners[str(cond)] = ViViTConditioner4T5(
                 output_dim=output_dim,
                 device=device,

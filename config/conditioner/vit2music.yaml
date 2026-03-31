@@ -1,0 +1,23 @@
+# @package __global__
+
+classifier_free_guidance:
+  training_dropout: 0.3
+  inference_coef: 3.0
+
+attribute_dropout: {}
+
+fuser:
+  cross_attention_pos_emb: false
+  cross_attention_pos_emb_scale: 1
+  sum: []
+  prepend: []
+  cross: [video]
+  input_interpolate: []
+
+conditioners:
+  video:
+    model: vit
+    vit:
+      name: google/vit-base-patch16-224
+      video_len: 32
+      finetune: true

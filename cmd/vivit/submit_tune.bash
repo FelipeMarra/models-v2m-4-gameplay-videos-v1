@@ -1,5 +1,5 @@
 #!/bin/bash
-#SBATCH --job-name=img_bind          # Nome do job
+#SBATCH --job-name=tune_vivit_bardo_video          # Nome do job
 #SBATCH --mail-type=ALL                 # Opções: BEGIN, END, FAIL, ALL, etc.
 #SBATCH --mail-user=felipe.marra@ufv.br       # Endereço de e-mail destinatário
 #SBATCH --partition=scientific          # Partição
@@ -7,7 +7,7 @@
 #SBATCH --nodes=1                       # Número de nós 1 de 1
 #SBATCH --ntasks=1                      # Número de tarefas
 #SBATCH --cpus-per-task=8               # CPUs por tarefa 8 de 128 (Max)
-#SBATCH --mem=32G                       # Memória RAM 32GB de 1007GB(Max)
+#SBATCH --mem=128G                       # Memória RAM 32GB de 1007GB(Max)
 #SBATCH --gres=gpu:1               # Solicitar 1 GPU de 4 (Max)
 #SBATCH --time=2-00:00:00               # Tempo máximo (2 dias)
 #SBATCH --output=job_%j.out        # Arquivo de saída (%j = job ID)
@@ -20,7 +20,6 @@ module load CUDA/12.6.0
 
 # Ativar ambiente
 source ~/miniconda3/bin/activate
-conda activate img_bind
 echo "$(conda info --envs)"
 
 # Informações do job
@@ -32,16 +31,41 @@ echo "Limites do processo:"
 ulimit -a | egrep 'virtual memory|max resident set|open files'
 echo "Iniciado em: $(date)"
 
+# Variáveis de ambiente PyTorch
 export AUDIOCRAFT_TEAM=default
-export USER=felipe # Will create an audiocraft_felipe folder inside checkpoints
+export USER=vivit_felipe # Will create an audiocraft_vivit_felipe folder inside checkpoints
+export PYTORCH_MPS_HIGH_WATERMARK_RATIO=0.0
+export OMP_NUM_THREADS=1
+export MKL_NUM_THREADS=1
+export NUMEXPR_NUM_THREADS=1
+export OPENBLAS_NUM_THREADS=1
+# export MALLOC_ARENA_MAX=2
 
-XP=ed94319e
-
-echo "Running ImageBind Score on ViViT->MusicGen XP ${XP}"
-
-python3 -u /home/es119256/dados/repos/visual-bardo-video/audiocraft/metrics/img_bind_consistency.py \
-    --eval_path /home/es119256/dados/xps/audiocraft_vivit_t5_felipe/xps/${XP} \
-    --dataset_path /home/es119256/dados/datasets/vmdb/nintendo-snes-spc
+dora -P audiocraft run \
+    fsdp.use=false \
+    autocast=true \
+    solver=musicgen/musicgen_video_32khz \
+    model/lm/model_scale=medium \
+    continue_from=//pretrained/facebook/musicgen-medium \
+    +ignore_state_conditioner=[description] \
+    conditioners.video.vivit.finetune=false \
+    conditioner=vivit2music \
+    dset=snes_mvdb \
+    dataset.num_workers=3 \
+    dataset.batch_size=6 \
+    dataset.generate.num_samples=10 \
+    dataset.valid.num_samples=500 \
+    schedule.cosine.warmup=8 \
+    optim.optimizer=adamw \
+    optim.lr=1e-4 \
+    optim.epochs=75 \
+    optim.updates_per_epoch=2000 \
+    optim.adam.weight_decay=0.01 \
+    optim.ema.use=false \
+    deadlock.timeout=1200 \
+    generate.lm.prompted_samples=False \
+    generate.lm.unprompted_samples=True \
+    logging.log_tensorboard=true
 
 echo "Memória final: $(free -h | grep Mem:)"
 echo "Finalizado em: $(date)"

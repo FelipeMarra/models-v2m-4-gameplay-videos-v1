@@ -8,7 +8,7 @@
 #SBATCH --ntasks=1                      # Número de tarefas
 #SBATCH --cpus-per-task=16               # CPUs por tarefa 8 de 128 (Max)
 #SBATCH --mem=64G                       # Memória RAM 32GB de 1007GB(Max)
-#SBATCH --gres=gpu:2               # Solicitar 1 GPU de 4 (Max)
+#SBATCH --gres=gpu:1               # Solicitar 1 GPU de 4 (Max)
 #SBATCH --time=2-00:00:00               # Tempo máximo (2 dias)
 #SBATCH --output=job_%j.out        # Arquivo de saída (%j = job ID)
 #SBATCH --error=job_%j.err         # Arquivo de erro
@@ -39,9 +39,9 @@ export OMP_NUM_THREADS=1
 export MKL_NUM_THREADS=1
 export NUMEXPR_NUM_THREADS=1
 export OPENBLAS_NUM_THREADS=1
-# export MALLOC_ARENA_MAX=2
+export MALLOC_ARENA_MAX=1
 
-dora -P audiocraft run -d \
+dora -P audiocraft run \
     fsdp.use=false \
     autocast=true \
     solver=musicgen/musicgen_video_32khz \
@@ -51,7 +51,7 @@ dora -P audiocraft run -d \
     conditioners.video.vit.finetune=false \
     conditioner=vit2music \
     dset=snes_mvdb \
-    dataset.num_workers=2 \
+    dataset.num_workers=1 \
     dataset.batch_size=6 \
     dataset.generate.num_samples=10 \
     dataset.valid.num_samples=500 \

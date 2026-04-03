@@ -960,30 +960,15 @@ class ViViTConditioner4T5(VideoConditioner):
 
         return embeds, mask
 
-class BatchMultiCrop(v2.Transform):
-    def forward(self, images_or_videos: tp.Tuple[torch.Tensor]):
-        global counter
-        tl, tr, _, _, center = images_or_videos # type: ignore | bottom will be equal to top since crop_height == resized_video_height
-
-        return torch.stack([tl, center, tr])
-
 class SNESViTImageProcessor():
-    def __init__(self, normalize:bool, training:bool) -> None:
+    def __init__(self, normalize:bool) -> None:
         self.normalize = normalize
 
-        if training:
-            self.compose = v2.Compose([
-                v2.Resize(size=224, antialias=True), # Resize short side to 244, which will bring us close to original SNES resolution
-                v2.RandomCrop(size=(224, 224)), # Random horizontal window given that height is already 244
-                v2.RandomHorizontalFlip(p=0.5)
-            ])
-        else:
-            self.compose = v2.Compose([
-                v2.Resize(size=224, antialias=True), # Resize short side to 244, which will bring us close to original SNES resolution
-                v2.FiveCrop(size=(224, 224)), # Random horizontal window given that height is already 244
-                BatchMultiCrop(),
-                v2.RandomHorizontalFlip(p=0.5)
-            ])
+        self.compose = v2.Compose([
+            v2.Resize(size=224, antialias=True), # Resize short side to 244, which will bring us close to original SNES resolution
+            v2.CenterCrop(size=(224, 224)), # Center crop, which will loose a little on the sides, but the player is probably in the midle
+            v2.RandomHorizontalFlip(p=0.5)
+        ])
 
     def __call__(self, videos:torch.Tensor) -> torch.Tensor:
         videos = self.compose(videos)
@@ -1025,8 +1010,7 @@ class ViTConditioner(VideoConditioner):
             logger.info(f"ViT will be evaluated with autocast as {autocast_dtype}")
             self.autocast = TorchAutocast(enabled=True, device_type=self.device, dtype=dtype)
 
-        self.training_image_processor = SNESViTImageProcessor(normalize=True, training=True)
-        self.inf_image_processor = SNESViTImageProcessor(normalize=True, training=False)
+        self.image_processor = SNESViTImageProcessor(normalize=True)
 
         vit_config = ViTModel.config_class.from_pretrained(name)
         # print(f"ViT CONFIG INSIDE VIT CONDITIONER\n{vit_config}")
@@ -1103,13 +1087,9 @@ class ViTConditioner(VideoConditioner):
                     container = av.open(v)
 
                     indices = self.lin_spaced_frame_indices(clip_len=self.video_len, seg_len=container.streams.video[0].frames)
-                    print(f"\n Lin Spacced Sampling {indices} from {container.streams.video[0].frames} available frames\n")
+                    # print(f"\n Lin Spacced Sampling {indices} from {container.streams.video[0].frames} available frames\n")
                     video = self.read_video_pyav(container=container, indices=indices)
-                    if self.training:
-                        video = self.training_image_processor(video)
-                    else:
-                        video = self.inf_image_processor(video)
-                    print(f"\n TOKENIZE video shape {video.shape}\n")
+                    video = self.image_processor(video)
 
                     # Save video to test augs
                     # file_name = v.split('.')[0].split('/')[-1]
@@ -1121,11 +1101,7 @@ class ViTConditioner(VideoConditioner):
                 videos["video"].append(video)
                 videos['attention_mask'].append(1)
             else:
-                print("\n@@@@@@@@@@@@@@ TOKENIZE ZEROS ####################\n")
-                if self.training:
-                    video = torch.zeros(self.video_len, 3, 224, 224).to(self.device)
-                else:
-                    video = torch.zeros(5, self.video_len, 3, 224, 224).to(self.device)
+                video = torch.zeros(self.video_len, 3, 224, 224).to(self.device)
 
                 videos["video"].append(video)
                 videos['attention_mask'].append(0)
@@ -1135,49 +1111,30 @@ class ViTConditioner(VideoConditioner):
     def forward(self, inputs: tp.Dict[str, tp.List[torch.Tensor]]) -> ConditionType:
         mask = inputs['attention_mask']
         videos = inputs['video']
-        print(f"videos: {len(videos)} | one video shape {videos[0].shape}")
 
         empty_idx = torch.LongTensor([i for i, xi in enumerate(mask) if xi == 0])
-        second_mask_dim = videos[0].shape[0] if self.training else videos[0].shape[1]
-        mask = torch.ones(len(videos), second_mask_dim)
+        mask = torch.ones(len(videos), videos[0].shape[0])
         mask[empty_idx, :] = 0
-        print(f"mask shape: {mask.shape}")
+        # print(f"mask shape: {mask.shape}")
 
-        # Looping will save a tremendous amount of memory, since we won't need to keep the patch level tokens stored
+        # Looping will save us some memory
         embeds = []
 
-        if self.training:
-            with torch.set_grad_enabled(self.finetune), self.autocast:
-                for video in videos:
-                    video = video.cuda()
-                    outputs = self.vit(video)
-                    print(f"outputs shape: {outputs.last_hidden_state.shape}")
-                    cls_token = outputs.last_hidden_state[:,0,:].unsqueeze(0) # 1, Frames, Hidden
-                    print(f"cls_token shape: {cls_token.shape}")
-                    embeds.append(cls_token)
-        else:
-            with torch.set_grad_enabled(False), self.autocast:
-                for video in videos:
-                    CROPS, F, C, H, W = video.shape
-                    video = video.cuda().reshape(CROPS*F, C, H, W) # Crops*Frames, C, H, W 
-                    outputs = self.vit(video)
-                    print(f"outputs shape: {outputs.last_hidden_state.shape}")
-                    cls_token:torch.Tensor = outputs.last_hidden_state[:,0,:] # Crops * Frames, Hidden
-                    print(f"cls_token shape: {cls_token.shape}")
-                    cls_token = cls_token.reshape(CROPS, F, -1) # Crops, Frames, Hidden
-                    print(f"cls_token REshape: {cls_token.shape}")
-                    cls_token = cls_token.mean(dim=0, keepdim=True)
-                    print(f"cls_token MEAN: {cls_token.shape}")
-                    embeds.append(cls_token)
+        with torch.set_grad_enabled(self.finetune and self.training), self.autocast:
+            for video in videos:
+                video = video.cuda()
+                outputs = self.vit(video)
+                cls_token = outputs.last_hidden_state[:,0,:].unsqueeze(0) # 1, Frames, Hidden
+                embeds.append(cls_token)
 
         embeds = torch.cat(embeds, 0)
-        print(f"embeds shape: {embeds.shape}")
+        # print(f"embeds shape: {embeds.shape}")
 
         embeds = embeds.to(self.output_proj.weight)
         embeds = self.output_proj(embeds)
-        print(f"FINAL ViT embeds shape: {embeds.shape}")
+        # print(f"FINAL ViT embeds shape: {embeds.shape}")
 
-        print(f"\n ViT mask shape: {mask.shape} \n")
+        # print(f"\n ViT mask shape: {mask.shape} \n")
         embeds = (embeds * mask.unsqueeze(-1).to(self.device))
 
         return embeds, mask

@@ -1,5 +1,5 @@
 #!/bin/bash
-#SBATCH --job-name=tune_vivit_bardo_video          # Nome do job
+#SBATCH --job-name=tune_vit_bardo_video          # Nome do job
 #SBATCH --mail-type=ALL                 # Opções: BEGIN, END, FAIL, ALL, etc.
 #SBATCH --mail-user=felipe.marra@ufv.br       # Endereço de e-mail destinatário
 #SBATCH --partition=scientific          # Partição

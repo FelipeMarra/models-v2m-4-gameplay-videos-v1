@@ -501,8 +501,9 @@ class SNESViViTImageProcessor():
         self.normalize = normalize
 
         self.compose = v2.Compose([
-            v2.RandomResizedCrop(size=(224, 224), antialias=True),
-            v2.RandomHorizontalFlip(p=0.5),
+            v2.Resize(size=224, antialias=True), # Resize short side to 244, which will bring us close to original SNES resolution
+            v2.CenterCrop(size=(224, 224)), # Center crop, which will loose a little on the sides, but the player is probably in the midle
+            v2.RandomHorizontalFlip(p=0.5)
         ])
 
     def __call__(self, videos:torch.Tensor) -> torch.Tensor:
@@ -601,61 +602,17 @@ class ViViTConditioner(VideoConditioner):
         video_tensor = video_tensor.permute(0, 2, 3, 1)
         torchvision.io.write_video(f'{file_name}.mp4', video_tensor, frame_rate)
 
-    def sample_frame_indices_random_fr(self, video_path, clip_len, seg_len):
+    def lin_spaced_frame_indices(self, clip_len, seg_len):
         '''
-        Sample a given number of frame indices from the video.
-        We set a window of a random size and position and sample frames linearly spaced.
-        The window size is set so that the stride is at leat 2, that is, we sample
-        at least every 2 frames. 
-        Since our videos have 300 frames and ViViT asks for 32, we can sample at most
-        every 9 frames.
+        Get a given number of linearly spaced frame indices from the video.
         Args:
             clip_len (`int`): Total number of frames to sample.
             seg_len (`int`): Maximum allowed index of sample's last frame.
         Returns:
             indices (`list[int]`): List of sampled frame indices
         '''
-        max_fr = np.ceil(seg_len/clip_len) # amout of frames vary a bit
-        min_fr = 2
-
-        try:
-            frame_sample_rate = np.random.randint(min_fr, max_fr) # rand between 2 and 9 (for 300 frames)
-        except:
-            logger.error(f"Video {video_path} has len of only {seg_len} and should be removed from the dataset")
-            frame_sample_rate=1
-
-        converted_len = int(clip_len * frame_sample_rate) # 32 * 2-9 -> 64-288
-        end_idx = np.random.randint(converted_len, seg_len) # end at rand between 64-288 and 299
-        # start from rand end - 64
-        start_idx = end_idx - converted_len
-        # start from rand end minus 64-288 until rand end -> 
-        # range from 0 to 299 lin spaced -> step frame_sample_rate
-        indices = np.linspace(start_idx, end_idx, num=clip_len)
-        indices = np.clip(indices, start_idx, end_idx - 1).astype(np.int64)
-        window_duration = (end_idx-start_idx)/30
-        return indices, window_duration
-
-    def sample_frame_indices(self, video_path, clip_len, frame_sample_rate, seg_len):
-        '''
-        Sample a given number of frame indices from the video.
-        Args:
-            clip_len (`int`): Total number of frames to sample.
-            frame_sample_rate (`int`): Sample every n-th frame.
-            seg_len (`int`): Maximum allowed index of sample's last frame.
-        Returns:
-            indices (`list[int]`): List of sampled frame indices
-        '''
-        try:
-            converted_len = int(clip_len * frame_sample_rate)
-            end_idx = np.random.randint(converted_len, seg_len) # rand between 64 and 300 (for videos with 300 frames)
-        except:
-            logger.error(f"Video {video_path} has len of only {seg_len} and should be removed from the dataset")
-            converted_len = clip_len
-            end_idx = np.random.randint(converted_len, seg_len) # rand between 32 and ??? (for videos with less than 64 frames, that should be remove from the dataset)
-
-        start_idx = end_idx - converted_len
-        indices = np.linspace(start_idx, end_idx, num=clip_len)
-        indices = np.clip(indices, start_idx, end_idx - 1).astype(np.int64)
+        indices = np.linspace(0, seg_len, num=clip_len)
+        indices = np.clip(indices, 0, seg_len - 1).astype(np.int64)
         return indices
 
     def tokenize(self, x: tp.List[tp.Optional[str]]) -> tp.Dict[str, tp.List[tp.Any]]:
@@ -667,8 +624,7 @@ class ViViTConditioner(VideoConditioner):
             if v != "":
                 if isinstance(v, str):
                     container = av.open(v)
-                    #indices, window_duration = self.sample_frame_indices(v, clip_len=32, seg_len=container.streams.video[0].frames)
-                    indices = self.sample_frame_indices(video_path=v, clip_len=32, frame_sample_rate=2, seg_len=container.streams.video[0].frames)
+                    indices = self.lin_spaced_frame_indices(clip_len=self.video_len, seg_len=container.streams.video[0].frames)
                     video = self.read_video_pyav(container=container, indices=indices)
                     video = self.image_processor(video)
 
@@ -699,7 +655,7 @@ class ViViTConditioner(VideoConditioner):
 
         with torch.set_grad_enabled(self.finetune and self.training), self.autocast:
             outputs = self.vivit(videos)
-            embeds = outputs.last_hidden_state
+            embeds = outputs.last_hidden_state[:,1:,] # Remove CLS
 
         empty_idx = torch.LongTensor([i for i, xi in enumerate(mask) if xi == 0])
         mask = torch.ones(embeds.shape[0], embeds.shape[1])

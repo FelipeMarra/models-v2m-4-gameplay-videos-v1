@@ -6,7 +6,7 @@
 #SBATCH --qos=scientific-qos            # QoS 
 #SBATCH --nodes=1                       # Número de nós 1 de 1
 #SBATCH --ntasks=1                      # Número de tarefas
-#SBATCH --cpus-per-task=8               # CPUs por tarefa 8 de 128 (Max)
+#SBATCH --cpus-per-task=12               # CPUs por tarefa 8 de 128 (Max)
 #SBATCH --mem=128G                       # Memória RAM 32GB de 1007GB(Max)
 #SBATCH --gres=gpu:1               # Solicitar 1 GPU de 4 (Max)
 #SBATCH --time=2-00:00:00               # Tempo máximo (2 dias)

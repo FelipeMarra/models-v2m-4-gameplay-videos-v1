@@ -7,6 +7,7 @@
 """
 # flake8: noqa
 from .clap_consistency import CLAPTextConsistencyMetric, TextConsistencyMetric
+# from lp_clap_consistency import LpCLAPTextConsistencyMetric
 from .chroma_cosinesim import ChromaCosineSimilarityMetric
 from .fad import FrechetAudioDistanceMetric
 from .kld import KLDivergenceMetric, PasstKLDivergenceMetric

@@ -6,7 +6,7 @@
 #SBATCH --qos=scientific-qos            # QoS 
 #SBATCH --nodes=1                       # Número de nós 1 de 1
 #SBATCH --ntasks=1                      # Número de tarefas
-#SBATCH --cpus-per-task=8               # CPUs por tarefa 8 de 128 (Max)
+#SBATCH --cpus-per-task=16               # CPUs por tarefa 8 de 128 (Max)
 #SBATCH --mem=64G                       # Memória RAM 32GB de 1007GB(Max)
 #SBATCH --gres=gpu:1               # Solicitar 1 GPU de 4 (Max)
 #SBATCH --time=2-00:00:00               # Tempo máximo (2 dias)
@@ -38,10 +38,12 @@ export USER=vivit_felipe # Will create an audiocraft_felipe folder inside checkp
 # /home/es119256/dados/xps/audiocraft_vivit_felipe/xps/ff71cd3f
 
 XP=ff71cd3f
+GAMES_LIST="legend-of-zelda-the-a-link-to-the-past, star-trek-the-next-generation-futures-past, street-fighter-ii-turbo, donkey-kong-country-3-dixie-kongs-double-trouble, tetris-2, cyber-spin, bishoujo-senshi-sailor-moon-another-story, doom, aerobiz, super-formation-soccer-ii, super-famicom-wars"
 
-echo "Running ImageBind Score on ViViT->MusicGen XP ${XP}"
+echo "Running Game-wise ImageBind Score on ViViT->MusicGen XP ${XP}"
 
 python3 -u /home/es119256/dados/repos/visual-bardo-video/audiocraft/metrics/img_bind_consistency.py \
+    --games_list "${GAMES_LIST}" \
     --eval_path /home/es119256/dados/xps/audiocraft_vivit_felipe/xps/${XP} \
     --dataset_path /home/es119256/dados/datasets/vmdb/nintendo-snes-spc
 

@@ -6,8 +6,8 @@
 #SBATCH --qos=scientific-qos            # QoS 
 #SBATCH --nodes=1                       # Número de nós 1 de 1
 #SBATCH --ntasks=1                      # Número de tarefas
-#SBATCH --cpus-per-task=8               # CPUs por tarefa 8 de 128 (Max)
-#SBATCH --mem=32G                       # Memória RAM 32GB de 1007GB(Max)
+#SBATCH --cpus-per-task=16               # CPUs por tarefa 8 de 128 (Max)
+#SBATCH --mem=64G                       # Memória RAM 32GB de 1007GB(Max)
 #SBATCH --gres=gpu:1              # Solicitar 1 GPU de 4 (Max)
 #SBATCH --time=2-00:00:00               # Tempo máximo (2 dias)
 #SBATCH --output=job_%j.out        # Arquivo de saída (%j = job ID)
@@ -52,7 +52,7 @@ export TF_PYTHON_EXE="$CONDA_ENV_DIR/fad/bin/python"
 export TF_LIBRARY_PATH="$CONDA_ENV_DIR/fad/lib/python3.10/site-packages/nvidia/cudnn/lib"
 
 # By default dataset.evaluate.disable_sampling=true
-dora -P audiocraft run \
+dora -P audiocraft run -d \
     fsdp.use=false \
     autocast=true \
     solver=musicgen/musicgen_video_32khz \
@@ -60,10 +60,10 @@ dora -P audiocraft run \
     continue_from=/home/es119256/dados/xps/audiocraft_vit_felipe/xps/frozen_vit \
     conditioner=vit2music \
     dset=snes_mvdb \
-    dataset.num_workers=1 \
-    dataset.batch_size=16 \
-    +dataset.evaluate.batch_size=16 \
-    +metrics.fad.tf.batch_size=16 \
+    dataset.num_workers=2 \
+    dataset.batch_size=8 \
+    +dataset.evaluate.batch_size=8 \
+    +metrics.fad.tf.batch_size=8 \
     execute_only=evaluate \
     dataset.evaluate.disable_sampling=true \
     evaluate.metrics.fad=true \

@@ -289,6 +289,18 @@ def get_text_consistency(cfg: omegaconf.DictConfig) -> metrics.TextConsistencyMe
 
     return klass(**kwargs)
 
+def get_lp_text_consistency(cfg: omegaconf.DictConfig) -> metrics.TextConsistencyMetric:
+    """Instantiate Text Consistency metric from config."""
+    # print("@@@@@ solvers.builders.get_text_consistency")
+    text_consistency_metrics = {
+        'clap': metrics.LpCLAPTextConsistencyMetric
+    }
+    klass = text_consistency_metrics[cfg.model]
+    kwargs = dict_from_config(cfg.get(cfg.model))
+    # print(f"@@@@ CLAP config: {kwargs}")
+
+    return klass(**kwargs)
+
 
 def get_chroma_cosine_similarity(cfg: omegaconf.DictConfig) -> metrics.ChromaCosineSimilarityMetric:
     """Instantiate Chroma Cosine Similarity metric from config."""

@@ -33,16 +33,14 @@ ulimit -a | egrep 'virtual memory|max resident set|open files'
 echo "Iniciado em: $(date)"
 
 export AUDIOCRAFT_TEAM=default
-export USER=vivit_felipe # Will create an audiocraft_felipe folder inside checkpoints
+export USER=vit_felipe # Will create an audiocraft_felipe folder inside checkpoints
 
-# /home/es119256/dados/xps/audiocraft_vivit_felipe/xps/ff71cd3f
+XP=1f6a0482
 
-XP=ff71cd3f
-
-echo "Running ImageBind Score on ViViT->MusicGen XP ${XP}"
+echo "Running ImageBind Score on Tuned ViT XP ${XP}"
 
 python3 -u /home/es119256/dados/repos/visual-bardo-video/audiocraft/metrics/img_bind_consistency.py \
-    --eval_path /home/es119256/dados/xps/audiocraft_vivit_felipe/xps/${XP} \
+    --eval_path /home/es119256/dados/xps/audiocraft_vit_felipe/xps/${XP} \
     --dataset_path /home/es119256/dados/datasets/vmdb/nintendo-snes-spc
 
 echo "Memória final: $(free -h | grep Mem:)"

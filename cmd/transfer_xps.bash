@@ -1,5 +1,5 @@
-export LOCAL_MACHINE="felipe@10.255.0.107:/media/felipe/32740855-6a5b-4166-b047-c8177bb37be1/xps_to_run_fad/frozen_vivit/"
-export CHECKPOINTS_AND_INFERENCE_FODLER="/home/es119256/dados/xps/audiocraft_vivit_felipe/xps/ff71cd3f/fad"
+export LOCAL_MACHINE="felipe@10.255.0.107:/media/felipe/32740855-6a5b-4166-b047-c8177bb37be1/tuned_gvmgen_eval_gen/eval_gen/"
+export CHECKPOINTS_AND_INFERENCE_FODLER="/home/es119256/dados/xps/audiocraft_gvmgen/xps/EVAL_gvmgen_tuned_2e012a4b/eval_gen/"
 
 #rsync -avzhP --exclude='*.th' $XPS_FOLDER $LOCAL_MACHINE
 #rsync -avzhP $XPS_FOLDER $LOCAL_MACHINE

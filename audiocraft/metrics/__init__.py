@@ -12,6 +12,6 @@ from .chroma_cosinesim import ChromaCosineSimilarityMetric
 from .fad import FrechetAudioDistanceMetric
 from .kld import KLDivergenceMetric, PasstKLDivergenceMetric
 from .genre_kld import GenreKLDivergenceMetric
-from .genre_acc import PaSSTGenreClassificationMetric
+from .genre_acc import ImgBindGenreClassificationMetric
 from .rvm import RelativeVolumeMel
 from .visqol import ViSQOL

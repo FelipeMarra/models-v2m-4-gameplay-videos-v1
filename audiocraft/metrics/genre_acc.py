@@ -1,59 +1,56 @@
 import os
 import json
 import logging
+import argparse
 import contextlib
 import typing as tp
 from functools import partial
-from ..environment import AudioCraftEnvironment
+#from ..environment import AudioCraftEnvironment
+
+import pandas as pd
+from tqdm import tqdm
 
 import torch
 import torchmetrics
 from torchmetrics import MetricCollection, Accuracy, F1Score
 import torch.nn as nn
 
-from ..data.audio_utils import convert_audio
-
 logger = logging.getLogger(__name__)
 
 GENRES = ['Action', 'Adventure', 'Fighting', 'Platform', 'Puzzle', 'RPG', 'Racing', 'Shooters', 'Simulation', 'Sports', 'Strategy']
 
-class _patch_passt_stft:
-    """Decorator to patch torch.stft in PaSST."""
+from imagebind import data
+from imagebind.models import imagebind_model
+from imagebind.models.imagebind_model import ModalityType
+
+class ImgBindOnMVDB(nn.Module):
     def __init__(self):
-        self.old_stft = torch.stft
+        super(ImgBindOnMVDB, self).__init__()
 
-    def __enter__(self):
-        # return_complex is a mandatory parameter in latest torch versions
-        # torch is throwing RuntimeErrors when not set
-        torch.stft = partial(torch.stft, return_complex=False)
+        self.img_bind = imagebind_model.imagebind_huge(pretrained=True)
 
-    def __exit__(self, *exc):
-        torch.stft = self.old_stft
+        self.lin_1 = nn.Linear(1024, 1024)
+        self.lin_2 = nn.Linear(1024, 512)
+        self.lin_3 = nn.Linear(512, 256)
+        self.class_head = nn.Linear(256, 1)
 
-class PaSSTMVDB(nn.Module):
-    """
-    From:https://github.com/FelipeMarra/passt-on-vmdb
-    """
-    def __init__(self):
-        try:
-            from hear21passt.base import get_basic_model, get_model_passt
-        except ModuleNotFoundError:
-            raise ModuleNotFoundError(
-                "Please install hear21passt to compute KL divergence: ",
-                "pip install 'git+https://github.com/kkoutini/passt_hear21@0.0.19#egg=hear21passt'"
-            )
+    def forward(self, audios_paths):
+        inputs = {
+            ModalityType.AUDIO: data.load_and_transform_audio_data(audios_paths, "cuda")
+        }
 
-        super(PaSSTMVDB, self).__init__()
+        with torch.no_grad():
+            embeddings = self.img_bind(inputs)[ModalityType.AUDIO]
 
-        # models are trained on 10 seconds audios from Audioset, but accept longer audios (20s, or 30s)
-        # These models are trained by sampling a 10-second time-pos-encodings sequence 
-        self.passt = get_basic_model(mode="logits")
-        self.passt.net = get_model_passt("passt_30sec", input_tdim=3000)
+        logits = self.lin_1(embeddings)
+        logits = nn.GELU()(logits)
 
-        self.class_head = nn.Linear(527, 1)
+        logits = self.lin_2(logits)
+        logits = nn.GELU()(logits)
 
-    def forward(self, x):
-        logits = self.passt(x)
+        logits = self.lin_3(logits)
+        logits = nn.GELU()(logits)
+
         logits = self.class_head(logits)
         logits = nn.Sigmoid()(logits)
 
@@ -66,12 +63,11 @@ class GenreClassificationMetrics(torchmetrics.Metric):
         super().__init__()
 
         self.metrics = MetricCollection([
-            Accuracy(task='multilabel', average='none', num_labels=len(GENRES)),
-            F1Score(task='multilabel', average='none', num_labels=len(GENRES))
+            Accuracy(task='multilabel', average='none', num_labels=len(GENRES)).cuda(),
+            F1Score(task='multilabel', average='none', num_labels=len(GENRES)).cuda()
         ])
 
-    def _get_label_distribution(self, x: torch.Tensor, sizes: torch.Tensor,
-                                sample_rates: torch.Tensor) -> tp.Optional[torch.Tensor]:
+    def _get_label_distribution(self, x: list[str]) -> tp.Optional[torch.Tensor]:
         """Get model output given provided input tensor.
 
         Args:
@@ -83,8 +79,7 @@ class GenreClassificationMetrics(torchmetrics.Metric):
         """
         raise NotImplementedError("implement method to extract label distributions from the model.")
 
-    def update(self, preds: torch.Tensor, targets: torch.Tensor,
-                sizes: torch.Tensor, sample_rates: torch.Tensor, jsons_paths:list[str]) -> None:
+    def update(self, preds:list[str], jsons_paths:list[str]) -> None:
         """Calculates running KL-Divergence loss between batches of audio
         preds (generated) and target (ground-truth)
         Args:
@@ -93,9 +88,8 @@ class GenreClassificationMetrics(torchmetrics.Metric):
             sizes (torch.Tensor): Actual audio sample length, of shape [B].
             sample_rates (torch.Tensor): Actual audio sample rate, of shape [B].
         """
-        assert preds.shape == targets.shape
-        assert preds.size(0) > 0, "Cannot update the loss with empty tensors"
-        preds_probs = self._get_label_distribution(preds, sizes, sample_rates)
+        assert len(preds) > 0, "Cannot update the loss with empty tensors"
+        preds_probs = self._get_label_distribution(preds) # (B, G)
 
         # Get gorund truth labels from json
         tgt_labels = []
@@ -106,7 +100,7 @@ class GenreClassificationMetrics(torchmetrics.Metric):
             gt_labels = [1 if g in gt_labels else 0 for g in GENRES]
             tgt_labels.append(torch.Tensor(gt_labels))
 
-        tgt_labels = torch.stack(tgt_labels, dim=0).to(self.device)
+        tgt_labels = torch.stack(tgt_labels, dim=0).cuda()
 
         if preds_probs is not None and tgt_labels is not None:
             assert preds_probs.shape == tgt_labels.shape
@@ -125,7 +119,7 @@ class GenreClassificationMetrics(torchmetrics.Metric):
 
         return genre_comp_metrics
 
-class PaSSTGenreClassificationMetric(GenreClassificationMetrics):
+class ImgBindGenreClassificationMetric(GenreClassificationMetrics):
     """Classification metrics based on tuned and modified PASST classifier on the VMDB dataset
 
     Based on the PasstKLDivergenceMetric class
@@ -135,54 +129,29 @@ class PaSSTGenreClassificationMetric(GenreClassificationMetrics):
     def __init__(self, checkpoints_path):
         assert checkpoints_path != None, "metrics.genre_kld.checkpoints must be set to a path containing a checkpoint for each genre"
         super().__init__()
-        self.checkpoints_path = AudioCraftEnvironment.resolve_reference_path(checkpoints_path)
+        #self.checkpoints_path = AudioCraftEnvironment.resolve_reference_path(checkpoints_path)
+        self.checkpoints_path = checkpoints_path
         self._initialize_model()
 
     def _initialize_model(self):
         """Initialize underlying PaSST audio classifier."""
-        model, sr, max_frames, min_frames = self._load_base_model()
-        self.min_input_frames = min_frames
-        self.max_input_frames = max_frames
-        self.model_sample_rate = sr
+        model = self._load_base_model()
         self.model = model
         self.model.eval()
-        self.model.to(self.device)
+        self.model.cuda()
 
     def _load_base_model(self):
-        """Load pretrained model from PaSST."""
-        max_duration = 30
-        min_duration = 0.15
-        model_sample_rate = 32_000
-        max_input_frames = int(max_duration * model_sample_rate)
-        min_input_frames = int(min_duration * model_sample_rate)
-
-        with open(os.devnull, 'w') as f, contextlib.redirect_stdout(f): # supress PaSST prints
-            model = PaSSTMVDB()
-
-        return model, model_sample_rate, max_input_frames, min_input_frames
+        """Load pretrained model from Image Bind."""
+        model = ImgBindOnMVDB()
+        return model
 
     def _load_genre_checkpoint(self, ckpt_path:str):
         state_dict = torch.load(ckpt_path)
         self.model.load_state_dict(state_dict['model_sate'])
         self.model.eval()
-        self.model.to(self.device)
+        self.model.cuda()
 
-    def _process_audio(self, wav: torch.Tensor, sample_rate: int, wav_len: int) -> tp.List[torch.Tensor]:
-        """Process audio to feed to the pretrained model."""
-        wav = wav.unsqueeze(0)
-        wav = wav[..., :wav_len]
-        wav = convert_audio(wav, from_rate=sample_rate, to_rate=self.model_sample_rate, to_channels=1)
-        wav = wav.squeeze(0)
-        # we don't pad but return a list of audio segments as this otherwise affects the KLD computation
-        segments = torch.split(wav, self.max_input_frames, dim=-1)
-        valid_segments = []
-        for s in segments:
-            # ignoring too small segments that are breaking the model inference
-            if s.size(-1) > self.min_input_frames:
-                valid_segments.append(s)
-        return [s[None] for s in valid_segments]
-
-    def _get_model_preds(self, wav: torch.Tensor) -> torch.Tensor:
+    def _get_model_preds(self, wav_path: list[str]) -> torch.Tensor:
         """
         Run the pretrained model and get the predictions.
 
@@ -192,28 +161,23 @@ class PaSSTGenreClassificationMetric(GenreClassificationMetrics):
         Return:
             Tensor with shape (B, G), where G is the amount of genres and B is the batch size
         """
-        assert wav.dim() == 3, f"Unexpected number of dims for preprocessed wav: {wav.shape}"
-        wav = wav.mean(dim=1)
+        with torch.no_grad():
+            probs_batch = None # type: ignore
 
-        with open(os.devnull, "w") as f, contextlib.redirect_stdout(f): # Supress PaSST prints
-            with torch.no_grad(), _patch_passt_stft():
-                probs_batch = None # type: ignore
+            for genre in GENRES:
+                ckpt_path = os.path.join(self.checkpoints_path, genre, 'checkpoints', 'best_model.pth')
+                self._load_genre_checkpoint(ckpt_path)
 
-                for genre in GENRES:
-                    ckpt_path = os.path.join(self.checkpoints_path, genre, 'checkpoints', 'best_model.pth')
-                    self._load_genre_checkpoint(ckpt_path)
+                res:torch.Tensor = self.model(wav_path) # (B, 1)
 
-                    res:torch.Tensor = self.model(wav.to(self.device)) # (B, 1)
+                if isinstance(probs_batch, torch.Tensor):
+                    probs_batch = torch.cat((probs_batch, res), dim=1) # (B, G)
+                else:
+                    probs_batch:torch.Tensor = res # (B, 1)
 
-                    if isinstance(probs_batch, torch.Tensor):
-                        probs_batch = torch.cat((probs_batch, res), dim=1) # (B, G)
-                    else:
-                        probs_batch:torch.Tensor = res # (B, 1)
+            return probs_batch
 
-                return probs_batch
-
-    def _get_label_distribution(self, x: torch.Tensor, sizes: torch.Tensor,
-                                sample_rates: torch.Tensor) -> tp.Optional[torch.Tensor]:
+    def _get_label_distribution(self, x: list[str]) -> tp.Optional[torch.Tensor]:
         """Get model output given provided input tensor.
 
         Args:
@@ -223,15 +187,43 @@ class PaSSTGenreClassificationMetric(GenreClassificationMetrics):
         Returns:
             probs (torch.Tensor, optional): Probabilities over labels, of shape [B, num_classes].
         """
-        all_probs: tp.List[torch.Tensor] = []
-        for i, wav in enumerate(x):
-            sample_rate = int(sample_rates[i].item())
-            wav_len = int(sizes[i].item())
-            wav_segments = self._process_audio(wav, sample_rate, wav_len)
-            for segment in wav_segments:
-                probs = self._get_model_preds(segment).mean(dim=0)
-                all_probs.append(probs)
-        if len(all_probs) > 0:
-            return torch.stack(all_probs, dim=0)
+        probs = self._get_model_preds(x)
+        return probs 
+
+def run_genre_acc_standalone(checkpoints_path, df):
+    """
+        Standalone ImageBind Score for csv generated by enabeling evaluate.metrics.save_eval_gen
+    """
+    img_bind_cls = ImgBindGenreClassificationMetric(checkpoints_path).cuda()
+    batch_size = 32
+    batch_y_pred = []
+    batch_json_path = []
+
+    for row in tqdm(df.itertuples(index=False, name=None), total=len(df)):
+        y_pred_path, y_path, y_seek, json_path = row
+
+        if len(batch_y_pred)-1 < batch_size:
+            batch_y_pred.append(y_pred_path+'.wav')
+            batch_json_path.append(json_path)
         else:
-            return None
+            img_bind_cls.update(batch_y_pred, batch_json_path)
+
+            batch_y_pred = [y_pred_path+'.wav']
+            batch_json_path = [json_path]
+
+    metric_value = img_bind_cls.compute()
+
+    print(f"\nImageBind Score: {metric_value}\n")
+
+if __name__ == "__main__":
+    # Parse arguments
+    parser = argparse.ArgumentParser()
+    parser.add_argument('--checkpoints_path', type=str, required=False)
+    parser.add_argument('--eval_path', type=str, required=True, help="path for the eval xp folder. /eval_gen/pred_to_orig.csv are automatically added")
+    parser.add_argument('--dataset_path', type=str, default="/home/es119256/dados/datasets/vmdb/nintendo-snes-spc", help="path for the snes mvdb dataset games folder")
+    args = parser.parse_args()
+
+    csv_path = os.path.join(args.eval_path, 'eval_gen/pred_to_orig.csv')
+    df = pd.read_csv(csv_path)
+
+    run_genre_acc_standalone(args.checkpoints_path, df)

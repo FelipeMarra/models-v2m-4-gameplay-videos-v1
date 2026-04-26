@@ -109,12 +109,12 @@ def run_img_bind_intra_game_standalone(df, games_list):
         game = y_pred_path.split('pred/')[-1].split('_soundtrack')[0]
 
         if game not in games_list:
-            tqdm.write(f"Game {game} no in list {games_list}")
+            # tqdm.write(f"Game {game} no in list {games_list}")
             continue
 
         img_bind = ImgBindVideoConsistencyMetric()
 
-        tqdm.write(f"Updating game {game} with json {json_path}")
+        # tqdm.write(f"Updating game {game} with json {json_path}")
         with open(json_path, 'r') as f:
             json_file = json.load(f)
             video_path = json_file["video"]
@@ -124,7 +124,7 @@ def run_img_bind_intra_game_standalone(df, games_list):
         metric_value = img_bind.compute()
         results_lists[game].append(metric_value)
 
-        tqdm.write(f"Updated results_lists[{game}] with value {metric_value} of type {type(metric_value)}")
+        # tqdm.write(f"Updated results_lists[{game}] with value {metric_value} of type {type(metric_value)}")
 
     for game, values in results_lists.items():
         np_array = np.array(values, dtype=float)

@@ -126,6 +126,7 @@ evaluate:
   every: 25
   num_workers: 5
   with_continaution: false
+  ground_truth: false
   metrics:
     base: false
     fad: false

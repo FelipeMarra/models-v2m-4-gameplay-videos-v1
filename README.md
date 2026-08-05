@@ -20,13 +20,13 @@ The main code for each of the encoders can be found in the [conditioners](/audio
 
 ## Commands Details
 ### Training Configs
-### 🔥 and ❄️ T5
+### 🔥 & ❄️ T5
 In the [T5's training cmd](/cmd/t5/submit_tune.bash), one can turn `conditioners.description.t5.finetune` on or off to finetune or maintain the T5 weights frozen.
 
-### 🔥 and ❄️ ViT
+### 🔥 & ❄️ ViT
 Beyond the finetune configuration - i.e., `conditioners.video.vit.finetune=true` -, [ViT's training command](cmd/vit/submit_tune.bash) also needs to ignore MusicGen's original conditioner weights - i.e., the T5 weights. For that, one should use `+ignore_state_conditioner=[description]`.
 
-### 🔥 and ❄️ ViViT
+### 🔥 & ❄️ ViViT
 [ViViT's training command](cmd/vivit/submit_tune.bash) also contemplates both finetune `conditioners.video.vivit.finetune=true` and ignore T5 `+ignore_state_conditioner=[description]` flags.
 
 ### General Eval Configs
@@ -57,3 +57,7 @@ if version.parse(transformers.__version__) >= version.parse("4.31.0"):
     if state_dict.get("text_branch.embeddings.position_ids") != None:
         del state_dict["text_branch.embeddings.position_ids"]
 ```
+
+## Adaptations Details
+### Adapting for Video
+#TODO

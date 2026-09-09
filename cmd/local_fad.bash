@@ -1,4 +1,4 @@
-# This was used to calculate FAD on my personal computer. May come in handy again since FAD it doesn't like slurm very much
+# This was used to calculate FAD on my personal computer. May come in handy again since FAD doesn't like slurm very much
 
 set -xeuo -pipefail
 

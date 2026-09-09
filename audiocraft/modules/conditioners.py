@@ -458,6 +458,9 @@ class T5Conditioner(TextConditioner):
         if normalize_text:
             self.text_normalizer = WhiteSpaceTokenizer(1, lemma=True, stopwords=True)
 
+        model_size = sum(p.numel() for p in self.t5.parameters())
+        logger.info(f"====================> N PARAMS T5 {model_size:.3e} <===========================")
+
     def tokenize(self, x: tp.List[tp.Optional[str]]) -> tp.Dict[str, torch.Tensor]:
         # if current sample doesn't have a certain attribute, replace with empty string
         entries: tp.List[str] = [xi if xi is not None else "" for xi in x]
@@ -570,6 +573,9 @@ class ViViTConditioner(VideoConditioner):
         else:
             # this makes sure that the vivit models is not part of the saved checkpoint
             self.__dict__['vivit'] = vivit.to(device)
+
+        model_size = sum(p.numel() for p in self.vivit.parameters())
+        logger.info(f"====================> N PARAMS VIVIT {model_size:.3e}  <===========================")
 
     def read_video_pyav(self, container, indices):
         '''
@@ -987,6 +993,9 @@ class ViTConditioner(VideoConditioner):
         else:
             # this makes sure that the vit models is not part of the saved checkpoint
             self.__dict__['vit'] = vit.to(device)
+
+        model_size = sum(p.numel() for p in self.vit.parameters())
+        logger.info(f"====================> N PARAMS ViT {model_size:.3e}  <===========================")
 
     def lin_spaced_frame_indices(self, clip_len, seg_len):
         '''

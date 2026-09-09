@@ -270,11 +270,11 @@ def get_genre_kldiv(cfg: omegaconf.DictConfig) -> metrics.GenreKLDivergenceMetri
     )
 
 
-def get_genre_class_metrics(cfg: omegaconf.DictConfig) -> metrics.ImgBindGenreClassificationMetric:
-    """Instantiate Genre Acuracy metric from config."""
-    return metrics.ImgBindGenreClassificationMetric(
-        checkpoints_path=cfg.checkpoints
-    )
+# def get_genre_class_metrics(cfg: omegaconf.DictConfig) -> metrics.ImgBindGenreClassificationMetric:
+#     """Instantiate Genre Acuracy metric from config."""
+#     return metrics.ImgBindGenreClassificationMetric(
+#         checkpoints_path=cfg.checkpoints
+#     )
 
 
 def get_text_consistency(cfg: omegaconf.DictConfig) -> metrics.TextConsistencyMetric:

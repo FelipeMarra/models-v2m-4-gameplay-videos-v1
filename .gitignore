@@ -207,8 +207,10 @@ marimo/_lsp/
 __marimo__/
 
 dataset/snes_mvdb
+dataset/snes_mvdb_90_10
 dataset/snes_mvdb-old
 egs/snes_mvdb
+egs/snes_mvdb_90_10
 egs/snes_mvdb-old
 *.out
 *.err

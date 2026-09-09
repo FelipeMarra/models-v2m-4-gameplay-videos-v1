@@ -110,6 +110,9 @@ class StandardSolver(ABC, flashy.BaseSolver):
         self.logger.info("Model size: %.2f M params", model_size)
         self.logger.info("Base memory usage, with model, grad and optim: %.2f GB", mem_usage)
 
+        model_size_total = sum(p.numel() for p in self.model.parameters())
+        self.logger.info(f"========================> TOTAL SIZE OF THE MODEL IN PARAMS {model_size_total:.3e} <===============================")
+
     @property
     def autocast(self):
         """Convenient autocast (or not) using the solver configuration."""

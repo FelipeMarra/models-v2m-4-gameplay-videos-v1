@@ -1013,7 +1013,6 @@ class MusicGenSolver(base.StandardSolver):
                             pred_file = os.path.join(pred_folder, json_stem+'.wav')
                             pred_files.append(pred_file)
 
-                        print("\n-----> from musicgen.py:", pred_files)
                         genre_class_metrics.update(pred_files, jsons_paths)
 
                     continue

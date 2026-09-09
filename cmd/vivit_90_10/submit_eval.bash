@@ -36,7 +36,7 @@ set -o pipefail
 
 # Variáveis de ambiente PyTorch
 export AUDIOCRAFT_TEAM=default
-export USER=vivit_felipe
+export USER=vivit_felipe_90_10
 
 export PYTORCH_MPS_HIGH_WATERMARK_RATIO=0.0
 export OMP_NUM_THREADS=1
@@ -56,7 +56,7 @@ dora -P audiocraft run -d \
     autocast=true \
     solver=musicgen/musicgen_video_32khz \
     model/lm/model_scale=medium \
-    continue_from=/home/es119256/dados/xps/audiocraft_vivit_felipe/xps/94dcc956 \
+    continue_from=/home/es119256/dados/xps/audiocraft_vivit_felipe_90_10/xps/8dd8a784 \
     conditioner=vivit2music \
     dset=snes_mvdb \
     dataset.num_workers=3 \

@@ -5,13 +5,12 @@
 # LICENSE file in the root directory of this source tree.
 
 import os
-import json
+import csv
 import logging
 import argparse
 import contextlib
 import typing as tp
 from functools import partial
-
 from tqdm import tqdm
 import pandas as pd
 
@@ -21,7 +20,7 @@ import torch.nn.functional as F
 from torch.utils.data import Dataset, DataLoader
 
 from audiocraft.data.audio_utils import convert_audio
-from audiocraft.data.audio import audio_read, audio_info
+from audiocraft.data.audio import audio_read
 
 logger = logging.getLogger(__name__)
 
@@ -276,12 +275,15 @@ class GenreAudioDataset(Dataset):
 
 if __name__ == "__main__":
     parser = argparse.ArgumentParser()
-    parser.add_argument('--games_list', type=str, required=False, help="comma-separated list of games")
     parser.add_argument('--eval_path', type=str, required=True, help="path for the eval xp folder. /eval_gen/pred_to_orig.csv are automatically added")
     parser.add_argument('--dataset_path', type=str, default="/home/es119256/dados/datasets/vmdb/nintendo-snes-spc", help="path for the snes mvdb dataset games folder")
     parser.add_argument('--batch_size', type=int, default=32, help="batch size for evaluation")
     parser.add_argument('--num_workers', type=int, default=4, help="number of workers for dataloader")
     args = parser.parse_args()
+
+    genres_csv_path = os.path.join(args.dataset_path, os.pardir, 'deepseek_genres.csv')
+    with open(genres_csv_path, mode="r") as csv_file:
+        genres_dict = {row["game_folder"]: row["game_genre"] for row in csv.DictReader(csv_file)}
 
     pred_to_orig_csv_path = os.path.join(args.eval_path, 'eval_gen/pred_to_orig.csv')
     pred_to_orig_df = pd.read_csv(pred_to_orig_csv_path)
@@ -292,12 +294,10 @@ if __name__ == "__main__":
     for row in tqdm(pred_to_orig_df.itertuples(index=False, name=None), total=len(pred_to_orig_df), desc="Mapping genres"):
         y_pred_path, y_path, y_seek, json_path = row
 
-        with open(json_path, 'r') as f:
-            game_genres = json.load(f)["game_genres"]
+        game = y_pred_path.split('/')[-1].split('_')[0]
+        genre = genres_dict[game]
 
-        for genre in game_genres:
-            if genre in pred_to_orig_dict:
-                pred_to_orig_dict[genre].append(row)
+        pred_to_orig_dict[genre].append(row)
 
     # Run metric for each genre
     kl_div_metric = PasstKLDivergenceMetric(pretrained_length=30).cuda()

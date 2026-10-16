@@ -2,7 +2,7 @@
 ## Introduction
 This is the code repository for the models presented in the paper titled Video to Music Generation for Gameplay Videos. The dataset, baseline models, and user study have their own repos.
 
-> Paper: #TODO
+> Paper: [arxiv.org/abs/2609.31810](https://arxiv.org/abs/2609.31810)
 
 > Demo (& other repos): [demo-v2m-4-gameplay-videos-v1](https://felipemarra.github.io/demo-v2m-4-gameplay-videos-v1/)
 
